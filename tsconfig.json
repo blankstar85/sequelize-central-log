@@ -1,0 +1,20 @@
+{
+    "compilerOptions": {
+        "module": "commonjs",
+        "outDir": "build",
+        "target": "ES2020",
+        "noImplicitAny": true,
+        "sourceMap": true,
+        "declaration": true,
+        "removeComments": true,
+        "esModuleInterop": true,
+        "strictNullChecks": true,
+        "skipLibCheck": true,
+        "noUnusedLocals": true,
+        "experimentalDecorators": true,
+        "emitDecoratorMetadata": true,
+    },
+    "ts-node": {
+        "files": true
+    }
+}
