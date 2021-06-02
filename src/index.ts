@@ -10,17 +10,15 @@ import {
 import { createNamespace, getNamespace, Namespace } from 'cls-hooked';
 
 interface ConfigOptions {
+	attributeModelId: string,
+	attributeModelId2: string,
+	attributeRevision: string,
+	attributeRevisionModel: string,
+	attributeRevisionModelTableName: string,
+	attributeUserId: string,
 	continuationKey: string;
 	continuationNamespace: string | null;
 	debug: boolean;
-	defaultAttributes: {
-		modelId: string; // Column name for Primary key on Model being tracked
-		modelId2: string;
-		revision: string; // Model Revision tracking Column
-		revisionModel: string; // Sequelize name for Revision Model
-		revisionModelTableName: string; // DB table name for Revision Model
-		userId: string; // user id column for revision table
-	};
 	enableMigration: boolean;
 	enableRevisionAttributeMigration: boolean;
 	exclude: string[];
@@ -35,28 +33,24 @@ interface ConfigOptions {
 	userModel: ModelStatic<any> | null;
 }
 
-type DeepPartial<T> = {
-	[P in keyof T]?: DeepPartial<T[P]>;
-};
+export interface CentralLogOptions extends Partial<ConfigOptions>{}
 
-export default class SequelizeCentralLog {
+export class SequelizeCentralLog {
 	private configuration: ConfigOptions;
 	private log: any;
 	private ns: Namespace | undefined;
 	private modelLevelExclude: { [key: string]: string[] } = {};
 	private usesCompositeKeys: string[] = [];
 	private settings: ConfigOptions = {
+		attributeModelId: 'model_id',
+		attributeModelId2: 'model_id2',
+		attributeRevision: 'revision',
+		attributeRevisionModel: 'Revision',
+		attributeRevisionModelTableName: 'Revision',
+		attributeUserId: 'userId',
 		continuationKey: 'userId',
 		continuationNamespace: null,
 		debug: false,
-		defaultAttributes: {
-			modelId: 'model_id',
-			modelId2: 'model_id2',
-			revision: 'revision',
-			revisionModel: 'Revision',
-			revisionModelTableName: 'Revision',
-			userId: 'userId',
-		},
 		enableMigration: false,
 		enableRevisionAttributeMigration: false,
 		exclude: [
@@ -83,17 +77,13 @@ export default class SequelizeCentralLog {
 
 	constructor(
 		private sequelizeDB: Sequelize,
-		private options: DeepPartial<ConfigOptions>,
+		private centralLogOptions?: CentralLogOptions,
 	) {
 		this.settings.mysql = this.sequelizeDB.getDialect() === 'mysql';
 
 		this.configuration = <ConfigOptions>{
 			...this.settings,
-			...this.options,
-			defaultAttributes: {
-				...this.settings.defaultAttributes,
-				...this.options.defaultAttributes,
-			},
+			...this.centralLogOptions,
 		};
 
 		this.log = this.configuration.log;
@@ -107,6 +97,7 @@ export default class SequelizeCentralLog {
 
 	/**
 	 * Setup Revision Model and returns Revision Model.
+	 * @returns ModelCtor<Model<any>> Revision Model for querying change data
 	 */
 	public defineModels(): ModelCtor<Model<any>> {
 		// set revision Model in sequelize.
@@ -115,21 +106,21 @@ export default class SequelizeCentralLog {
 				type: DataTypes.TEXT,
 				allowNull: false,
 			},
-			[this.configuration.defaultAttributes.modelId]: {
+			[this.configuration.attributeModelId]: {
 				type: DataTypes.INTEGER,
 				allowNull: false,
 			},
-			[this.configuration.defaultAttributes.modelId2]: {
+			[this.configuration.attributeModelId2]: {
 				type: DataTypes.INTEGER,
 				allowNull: true,
 			},
-			[this.configuration.defaultAttributes.userId]: {
+			[this.configuration.attributeUserId]: {
 				type: DataTypes.INTEGER,
 				allowNull: true,
 				defaultValue: 0,
 			},
 			operation: DataTypes.STRING(7),
-			[this.configuration.defaultAttributes.revision]: {
+			[this.configuration.attributeRevision]: {
 				type: DataTypes.INTEGER,
 				allowNull: false,
 			},
@@ -144,22 +135,22 @@ export default class SequelizeCentralLog {
 		};
 
 		if (!this.configuration.userModel) {
-			delete attributes[this.configuration.defaultAttributes.userId];
+			delete attributes[this.configuration.attributeUserId];
 		}
 		if (!this.configuration.trackFullModel) {
 			delete attributes.current;
 		}
 		if (!this.configuration.useCompositeKeys) {
-			delete attributes[this.configuration.defaultAttributes.modelId2];
+			delete attributes[this.configuration.attributeModelId2];
 		}
 
 		const Revision = this.sequelizeDB.define(
-			this.configuration.defaultAttributes.revisionModel,
+			this.configuration.attributeRevisionModel,
 			attributes,
 			{
 				freezeTableName: this.configuration.freezeTableName,
 				underscored: this.configuration.underscored,
-				tableName: this.configuration.defaultAttributes.revisionModelTableName,
+				tableName: this.configuration.attributeRevisionModelTableName,
 				updatedAt: false,
 			},
 		);
@@ -179,7 +170,7 @@ export default class SequelizeCentralLog {
 	 * @param options
 	 */
 	public addHistory(
-		model: any,
+		model: ModelCtor<Model<any>>,
 		options?: { exclude?: string[]; hasCompositeKey?: boolean },
 	): void {
 		if (this.configuration.debug) {
@@ -199,13 +190,14 @@ export default class SequelizeCentralLog {
 			type: DataTypes.INTEGER,
 			defaultValue: 0,
 		};
+		//@ts-ignore
 		model.refreshAttributes();
 
 		// add revision attribute to the model
 		if (this.configuration.enableRevisionAttributeMigration) {
-			const tableName = model.getTableName();
+			const tableName = Model.getTableName();
 			const queryInterface = this.sequelizeDB.getQueryInterface();
-			const revisionAttribute = this.configuration.defaultAttributes.revision;
+			const revisionAttribute = this.configuration.attributeRevision;
 
 			queryInterface.describeTable(tableName).then((attributes) => {
 				if (!attributes[revisionAttribute]) {
@@ -235,27 +227,28 @@ export default class SequelizeCentralLog {
 		model.addHook('afterDestroy', this.createAfterHook('destroy'));
 
 		const scope: { [key: string]: string | number | { [Op.col]: any } } = {
-			model: model.name,
+			model: Model.name,
 		};
 		if (options?.hasCompositeKey) {
 			if (primaryKeys.length < 2) {
 				throw new Error(
-					`Model ${model.name}: Only has one primary Key, please check Model definition or don't pass hasCompositeKey: true`,
+					`Model ${Model.name}: Only has one primary Key, please check Model definition or don't pass hasCompositeKey: true`,
 				);
 			}
-			scope[this.configuration.defaultAttributes.modelId2] = {
-				[Op.col]: `${model.name}.${primaryKeys[1]}`,
+			scope[this.configuration.attributeModelId2] = {
+				[Op.col]: `${Model.name}.${primaryKeys[1]}`,
 			};
-			this.usesCompositeKeys.push(model.name);
+			this.usesCompositeKeys.push(Model.name);
 		}
 
 		// Add association to revision.
+		// @ts-ignore
 		model.hasMany(
 			this.sequelizeDB.models[
-				this.configuration.defaultAttributes.revisionModel
+				this.configuration.attributeRevisionModel
 			],
 			{
-				foreignKey: this.configuration.defaultAttributes.modelId,
+				foreignKey: this.configuration.attributeModelId,
 				constraints: false,
 				scope,
 			},
@@ -336,7 +329,7 @@ export default class SequelizeCentralLog {
 
 			if (destroyOperation || (diff && diff.length > 0)) {
 				instance.set(
-					this.configuration.defaultAttributes.revision,
+					this.configuration.attributeRevision,
 					(currentRevision || 0) + 1,
 				);
 				if (!instance.context) {
@@ -379,15 +372,15 @@ export default class SequelizeCentralLog {
 			) {
 				const diff = instance.context.diff;
 				const currentRevision = instance.get(
-					this.configuration.defaultAttributes.revision,
+					this.configuration.attributeRevision,
 				);
 				const revisionValues = {
 					model: modelName,
-					[this.configuration.defaultAttributes.modelId]: instance.get(
+					[this.configuration.attributeModelId]: instance.get(
 						primaryKeys[0],
 					),
 					operation,
-					[this.configuration.defaultAttributes.revision]: currentRevision,
+					[this.configuration.attributeRevision]: currentRevision,
 					diff,
 				};
 
@@ -398,7 +391,7 @@ export default class SequelizeCentralLog {
 				// Set User by Continuation Key, userId set on the Option for the transaction or null if it can't figure it out.
 				// Opt params take precedent.
 				if (this.configuration.userModel) {
-					revisionValues[this.configuration.defaultAttributes.userId] =
+					revisionValues[this.configuration.attributeUserId] =
 						opt.userId ||
 						(this.ns && this.ns.get(this.configuration.continuationKey)) ||
 						null;
@@ -407,7 +400,7 @@ export default class SequelizeCentralLog {
 					this.configuration.useCompositeKeys &&
 					this.usesCompositeKeys.some((key) => key === modelName)
 				) {
-					revisionValues[this.configuration.defaultAttributes.modelId2] =
+					revisionValues[this.configuration.attributeModelId2] =
 						instance.get(primaryKeys[1]);
 				}
 

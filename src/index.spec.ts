@@ -1,7 +1,7 @@
 import 'mocha';
 // Simport { expect } from 'chai';
 import { DataTypes, Sequelize } from 'sequelize';
-// import SequelizeCentralLog from './index';
+import { SequelizeCentralLog } from './index';
 
 describe('SequelizeCentralLog', () => {
 	let sequelize: Sequelize;
@@ -37,7 +37,9 @@ describe('SequelizeCentralLog', () => {
 	describe('Changes to Models', () => {
 		it('on update it should log a revision', () => {});
 		it('on create/delete should log the current values', () => {
-			//
+			const CentralLog = new SequelizeCentralLog(sequelize);
+			const Revision = CentralLog.defineModels();
+			CentralLog.addHistory(sequelize.model('user'));
 		});
 	});
 	describe('Should not log Revision', () => {
