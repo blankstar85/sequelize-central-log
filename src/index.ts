@@ -42,8 +42,8 @@ export class SequelizeCentralLog {
 	private modelLevelExclude: { [key: string]: string[] } = {};
 	private usesCompositeKeys: string[] = [];
 	private settings: ConfigOptions = {
-		attributeModelId: 'model_id',
-		attributeModelId2: 'model_id2',
+		attributeModelId: 'modelID',
+		attributeModelId2: 'modelId2',
 		attributeRevision: 'revision',
 		attributeRevisionModel: 'Revision',
 		attributeRevisionModelTableName: 'Revision',
@@ -117,7 +117,7 @@ export class SequelizeCentralLog {
 			[this.configuration.attributeUserId]: {
 				type: DataTypes.INTEGER,
 				allowNull: true,
-				defaultValue: 0,
+				defaultValue: null,
 			},
 			operation: DataTypes.STRING(7),
 			[this.configuration.attributeRevision]: {
