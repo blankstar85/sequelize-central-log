@@ -162,8 +162,7 @@ Please use GitHub's [Issue Tracker](https://github.com/blankstar85/sequelize-cen
 
 © Jacob Copeland
 
-Distributed under the MIT license. See ``LICENSE`` for more information.
-[https://github.com/nielsgl/sequelize-paper-trail](https://github.com/nielsgl/)
+Distributed under the MIT license. See [LICENSE](https://github.com/blankstar85/sequelize-central-log/blob/master/LICENSE) for more information.
 
 
 ## Thanks
