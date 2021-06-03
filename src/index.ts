@@ -10,12 +10,12 @@ import {
 import { createNamespace, getNamespace, Namespace } from 'cls-hooked';
 
 interface ConfigOptions {
-	attributeModelId: string,
-	attributeModelId2: string,
-	attributeRevision: string,
-	attributeRevisionModel: string,
-	attributeRevisionModelTableName: string,
-	attributeUserId: string,
+	attributeModelId: string;
+	attributeModelId2: string;
+	attributeRevision: string;
+	attributeRevisionModel: string;
+	attributeRevisionModelTableName: string;
+	attributeUserId: string;
 	continuationKey: string;
 	continuationNamespace: string | null;
 	debug: boolean;
@@ -33,7 +33,7 @@ interface ConfigOptions {
 	userModel: ModelStatic<any> | null;
 }
 
-export interface CentralLogOptions extends Partial<ConfigOptions>{}
+export type CentralLogOptions = Partial<ConfigOptions>;
 
 export class SequelizeCentralLog {
 	private configuration: ConfigOptions;
@@ -190,12 +190,13 @@ export class SequelizeCentralLog {
 			type: DataTypes.INTEGER,
 			defaultValue: 0,
 		};
+		// eslint-disable-next-line @typescript-eslint/ban-ts-comment
 		//@ts-ignore
 		model.refreshAttributes();
 
 		// add revision attribute to the model
 		if (this.configuration.enableRevisionAttributeMigration) {
-			const tableName = Model.getTableName();
+			const tableName = model.getTableName();
 			const queryInterface = this.sequelizeDB.getQueryInterface();
 			const revisionAttribute = this.configuration.attributeRevision;
 
@@ -242,11 +243,8 @@ export class SequelizeCentralLog {
 		}
 
 		// Add association to revision.
-		// @ts-ignore
 		model.hasMany(
-			this.sequelizeDB.models[
-				this.configuration.attributeRevisionModel
-			],
+			this.sequelizeDB.models[this.configuration.attributeRevisionModel],
 			{
 				foreignKey: this.configuration.attributeModelId,
 				constraints: false,
@@ -376,9 +374,7 @@ export class SequelizeCentralLog {
 				);
 				const revisionValues = {
 					model: modelName,
-					[this.configuration.attributeModelId]: instance.get(
-						primaryKeys[0],
-					),
+					[this.configuration.attributeModelId]: instance.get(primaryKeys[0]),
 					operation,
 					[this.configuration.attributeRevision]: currentRevision,
 					diff,
@@ -400,8 +396,9 @@ export class SequelizeCentralLog {
 					this.configuration.useCompositeKeys &&
 					this.usesCompositeKeys.some((key) => key === modelName)
 				) {
-					revisionValues[this.configuration.attributeModelId2] =
-						instance.get(primaryKeys[1]);
+					revisionValues[this.configuration.attributeModelId2] = instance.get(
+						primaryKeys[1],
+					);
 				}
 
 				this.revisionModel.create(revisionValues).catch((error) => {
