@@ -174,7 +174,7 @@ export class SequelizeCentralLog {
 		options?: { exclude?: string[]; hasCompositeKey?: boolean },
 	): void {
 		if (this.configuration.debug) {
-			this.log(`Enabling paper trail on ${model.name}`);
+			this.log(`Enabling Central Log on ${model.name}`);
 		}
 
 		if (options?.exclude) {
