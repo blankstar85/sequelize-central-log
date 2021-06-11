@@ -39,10 +39,8 @@ export class SequelizeCentralLog {
 	private configuration: ConfigOptions;
 	private log: any;
 	private ns: Namespace | undefined;
-	private modelLevelExclude: { [key: string]: string[] } = {};
-	private usesCompositeKeys: string[] = [];
 	private settings: ConfigOptions = {
-		attributeModelId: 'modelID',
+		attributeModelId: 'modelId',
 		attributeModelId2: 'modelId2',
 		attributeRevision: 'revision',
 		attributeRevisionModel: 'Revision',
@@ -99,7 +97,7 @@ export class SequelizeCentralLog {
 	 * Setup Revision Model and returns Revision Model.
 	 * @returns ModelCtor<Model<any>> Revision Model for querying change data
 	 */
-	public defineModels(): ModelCtor<Model<any>> {
+	public async defineModels(): Promise<ModelCtor<Model<any>>> {
 		// set revision Model in sequelize.
 		const attributes: ModelAttributes = {
 			model: {
@@ -155,10 +153,15 @@ export class SequelizeCentralLog {
 			},
 		);
 
+		Revision.addHook('beforeUpdate', this.readOnlyHook);
+		Revision.addHook('beforeDestroy', this.readOnlyHook);
+
 		if (this.configuration.userModel) {
-			Revision.belongsTo(this.configuration.userModel);
+			Revision.belongsTo(this.configuration.userModel, {
+				foreignKey: this.configuration.attributeUserId,
+			});
 		}
-		if (this.configuration.enableMigration) Revision.sync();
+		if (this.configuration.enableMigration) await Revision.sync();
 
 		this.revisionModel = Revision;
 		return Revision;
@@ -169,19 +172,15 @@ export class SequelizeCentralLog {
 	 * @param model Sequelize Model to add history tracking to
 	 * @param options
 	 */
-	public addHistory(
+	public async addHistory(
 		model: ModelCtor<Model<any>>,
 		options?: { exclude?: string[]; hasCompositeKey?: boolean },
-	): void {
+	): Promise<void> {
 		if (this.configuration.debug) {
 			this.log(`Enabling Central Log on ${model.name}`);
 		}
 
-		if (options?.exclude) {
-			this.modelLevelExclude[model.name] = options.exclude;
-		} else {
-			this.modelLevelExclude[model.name] = [];
-		}
+		model['modelLevelExclude'] = options?.exclude || [];
 
 		const primaryKeys = model.primaryKeyAttributes;
 
@@ -200,24 +199,23 @@ export class SequelizeCentralLog {
 			const queryInterface = this.sequelizeDB.getQueryInterface();
 			const revisionAttribute = this.configuration.attributeRevision;
 
-			queryInterface.describeTable(tableName).then((attributes) => {
-				if (!attributes[revisionAttribute]) {
-					if (this.configuration.debug) {
-						this.log(`Adding revision attribute to ${tableName}`);
-					}
+			const tableAttributes = await queryInterface.describeTable(tableName);
 
-					queryInterface
-						.addColumn(tableName, revisionAttribute, {
-							type: DataTypes.INTEGER,
-							defaultValue: 0,
-						})
-						.catch((error) => {
-							this.log(
-								`Error occured while adding revisionAttribute to ${tableName}.. ${error}`,
-							);
-						});
+			if (!tableAttributes[revisionAttribute]) {
+				if (this.configuration.debug) {
+					this.log(`Adding revision attribute to ${tableName}`);
 				}
-			});
+				try {
+					await queryInterface.addColumn(tableName, revisionAttribute, {
+						type: DataTypes.INTEGER,
+						defaultValue: 0,
+					});
+				} catch (error) {
+					this.log(
+						`Error occured while adding revisionAttribute to ${tableName}.. ${error}`,
+					);
+				}
+			}
 		}
 
 		model.addHook('beforeCreate', this.createBeforeHook('create'));
@@ -239,7 +237,8 @@ export class SequelizeCentralLog {
 			scope[this.configuration.attributeModelId2] = {
 				[Op.col]: `${Model.name}.${primaryKeys[1]}`,
 			};
-			this.usesCompositeKeys.push(Model.name);
+
+			model['usesCompositeKeys'] = true;
 		}
 
 		// Add association to revision.
@@ -260,13 +259,12 @@ export class SequelizeCentralLog {
 	private removeKeys(obj: any, instance: any): void {
 		const finalExclude = [
 			...this.configuration.exclude,
-			...this.modelLevelExclude[instance.constructor.name],
+			...instance.constructor.modelLevelExclude,
 			...this.getPrimaryKeys(instance),
 		];
 		for (const k in obj) {
 			if (
 				(obj[k] instanceof Object && !(obj[k] instanceof Date)) ||
-				!obj[k] ||
 				finalExclude.some((rm) => rm === k)
 			) {
 				delete obj[k];
@@ -274,11 +272,17 @@ export class SequelizeCentralLog {
 		}
 	}
 
+	private readOnlyHook() {
+		throw new Error(
+			`This is a read-only revision table. You cannot update/destroy records.`,
+		);
+	}
+
 	private createBeforeHook(operation: string) {
 		return (instance: any, opt: any) => {
 			// Allow disabling of history for a transaction // No reason to go further
 			if (opt.noHistory) {
-				if (this.configuration.log) {
+				if (this.configuration.debug) {
 					this.log('Transaction set to ignore logging, opt.noHistory: true');
 				}
 				return;
@@ -296,15 +300,20 @@ export class SequelizeCentralLog {
 				(value) =>
 					![
 						...this.configuration.exclude,
-						...this.modelLevelExclude[modelName],
+						...instance.constructor.modelLevelExclude,
 					].some((filterValue) => filterValue === value),
 			);
 			this.removeKeys(currentVersion, instance);
 			this.removeKeys(previousVersion, instance);
 
 			// Don't allow revision to be modified.
-			instance.set('revision', previousVersion['revision']);
-			const currentRevision = instance.get('revision');
+			instance.set(
+				this.configuration.attributeRevision,
+				instance._previousDataValues['revision'],
+			);
+			const currentRevision = instance.get(
+				this.configuration.attributeRevision,
+			);
 
 			if (this.configuration.debug) {
 				this.log(`BeforeHook Called on instance: ${modelName}`);
@@ -317,8 +326,9 @@ export class SequelizeCentralLog {
 			} else {
 				diff = diffValuesToRead.map((attribute: string) => {
 					return {
-						[attribute]: {
-							old: previousVersion[attribute],
+						key: attribute,
+						values: {
+							old: previousVersion[attribute] || null,
 							new: currentVersion[attribute],
 						},
 					};
@@ -326,10 +336,12 @@ export class SequelizeCentralLog {
 			}
 
 			if (destroyOperation || (diff && diff.length > 0)) {
-				instance.set(
-					this.configuration.attributeRevision,
-					(currentRevision || 0) + 1,
-				);
+				// Set current revision, starting at 0 for create and adding one for every revision. If record already exists, start incrementing.
+				let revision = 0;
+				if (operation !== 'create') {
+					revision = (currentRevision || 0) + 1;
+				}
+				instance.set(this.configuration.attributeRevision, revision);
 				if (!instance.context) {
 					instance.context = {};
 				}
@@ -344,7 +356,7 @@ export class SequelizeCentralLog {
 	}
 
 	private createAfterHook(operation: string) {
-		return (instance: any, opt: any) => {
+		return async (instance: any, opt: any) => {
 			const modelName = instance.constructor.name;
 			const currenVersion = { ...instance.dataValues };
 			const destroyOperation = operation === 'destroy';
@@ -394,16 +406,18 @@ export class SequelizeCentralLog {
 				}
 				if (
 					this.configuration.useCompositeKeys &&
-					this.usesCompositeKeys.some((key) => key === modelName)
+					instance.constructor.usesCompositeKeys
 				) {
 					revisionValues[this.configuration.attributeModelId2] = instance.get(
 						primaryKeys[1],
 					);
 				}
 
-				this.revisionModel.create(revisionValues).catch((error) => {
-					console.log(error);
-				});
+				try {
+					await this.revisionModel.create(revisionValues);
+				} catch (error) {
+					this.log(error);
+				}
 			}
 
 			if (this.configuration.debug) {
