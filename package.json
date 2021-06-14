@@ -9,7 +9,7 @@
   "types": "lib/index.d.ts",
   "scripts": {
     "build": "tsc",
-    "lint": "eslint */**/*.{js,ts,tsx} --quiet --fix",
+    "lint": "eslint src/**/*.{js,ts,tsx} --quiet --fix",
     "release": "release-it",
     "test": "mocha -r ts-node/register src/**/*.spec.ts"
   },
