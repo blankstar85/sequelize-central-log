@@ -4,7 +4,7 @@
 [![license](https://img.shields.io/github/license/forwardemail/email-templates.svg)](LICENSE)
 
 Maintain Sequelize Model change history in a central table. This is highly configurable and supports
-composite primary keys ( up to 2 for now). Written in Typescript and provides typing. 
+composite primary keys ( up to 3 for now). Written in Typescript and provides typing. 
 
 Can be used with Sequelize-typescript as well.
 

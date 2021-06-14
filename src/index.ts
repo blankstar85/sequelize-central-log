@@ -12,6 +12,7 @@ import { createNamespace, getNamespace, Namespace } from 'cls-hooked';
 interface ConfigOptions {
 	attributeModelId: string;
 	attributeModelId2: string;
+	attributeModelId3: string;
 	attributeRevision: string;
 	attributeRevisionModel: string;
 	attributeRevisionModelTableName: string;
@@ -42,6 +43,7 @@ export class SequelizeCentralLog {
 	private settings: ConfigOptions = {
 		attributeModelId: 'modelId',
 		attributeModelId2: 'modelId2',
+		attributeModelId3: 'modelId3',
 		attributeRevision: 'revision',
 		attributeRevisionModel: 'Revision',
 		attributeRevisionModelTableName: 'Revision',
@@ -112,6 +114,10 @@ export class SequelizeCentralLog {
 				type: DataTypes.INTEGER,
 				allowNull: true,
 			},
+			[this.configuration.attributeModelId3]: {
+				type: DataTypes.INTEGER,
+				allowNull: true,
+			},
 			[this.configuration.attributeUserId]: {
 				type: DataTypes.INTEGER,
 				allowNull: true,
@@ -140,6 +146,7 @@ export class SequelizeCentralLog {
 		}
 		if (!this.configuration.useCompositeKeys) {
 			delete attributes[this.configuration.attributeModelId2];
+			delete attributes[this.configuration.attributeModelId3];
 		}
 
 		const Revision = this.sequelizeDB.define(
@@ -170,11 +177,15 @@ export class SequelizeCentralLog {
 	/**
 	 * Enables and add history tracking to the passed in Model
 	 * @param model Sequelize Model to add history tracking to
-	 * @param options
+	 * @param options Model level Options exclude removes columns on model only, hasCompositeKey enables multi key tracking, thirdCompositeKeyCount if it has three keys
 	 */
 	public async addHistory(
 		model: ModelCtor<Model<any>>,
-		options?: { exclude?: string[]; hasCompositeKey?: boolean },
+		options?: {
+			exclude?: string[];
+			hasCompositeKey?: boolean;
+			thirdCompositeKey?: boolean;
+		},
 	): Promise<void> {
 		if (this.configuration.debug) {
 			this.log(`Enabling Central Log on ${model.name}`);
@@ -239,6 +250,18 @@ export class SequelizeCentralLog {
 			};
 
 			model['usesCompositeKeys'] = true;
+
+			if (options?.thirdCompositeKey) {
+				if (primaryKeys.length < 3) {
+					throw new Error(
+						`Model ${Model.name}: Was marked to have three keys, but has less or more than 3, please check model definition or don't pass thirdCompositeKey.`,
+					);
+				}
+				model['thirdCompositeKey'] = true;
+				scope[this.configuration.attributeModelId3] = {
+					[Op.col]: `${Model.name}.${primaryKeys[2]}`,
+				};
+			}
 		}
 
 		// Add association to revision.
@@ -411,6 +434,11 @@ export class SequelizeCentralLog {
 					revisionValues[this.configuration.attributeModelId2] = instance.get(
 						primaryKeys[1],
 					);
+					if (instance.constructor.thirdCompositeKey) {
+						revisionValues[this.configuration.attributeModelId3] = instance.get(
+							primaryKeys[2],
+						);
+					}
 				}
 
 				try {

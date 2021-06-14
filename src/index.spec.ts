@@ -51,6 +51,26 @@ describe('SequelizeCentralLog', () => {
 				type: DataTypes.STRING,
 			},
 		});
+		sequelize.define('ThreeKey', {
+			id1: {
+				primaryKey: true,
+				type: DataTypes.INTEGER,
+				allowNull: false,
+			},
+			id2: {
+				primaryKey: true,
+				type: DataTypes.INTEGER,
+				allowNull: false,
+			},
+			id3: {
+				primaryKey: true,
+				type: DataTypes.INTEGER,
+				allowNull: false,
+			},
+			name: {
+				type: DataTypes.STRING,
+			},
+		});
 		sequelize.define('NotIdPrimary', {
 			notID: {
 				type: DataTypes.INTEGER,
@@ -243,22 +263,41 @@ describe('SequelizeCentralLog', () => {
 		let Revision;
 		let Table;
 		beforeEach(async () => {
-			Table = sequelize.model('TwoKey');
 			CentralLog = new SequelizeCentralLog(sequelize, {
 				enableRevisionAttributeMigration: true,
 				enableMigration: true,
 				useCompositeKeys: true,
 			});
 			Revision = await CentralLog.defineModels();
-			await CentralLog.addHistory(Table, { hasCompositeKey: true });
 		});
 		it('should log the revision to a 2 composite key instance', async () => {
+			Table = sequelize.model('TwoKey');
+			await CentralLog.addHistory(Table, { hasCompositeKey: true });
 			const table = await Table.create({ id1: 1, id2: 2, name: 'OtherBob' });
 			const revisions = await Revision.findByPk(1);
 			expect(table);
 			expect(revisions);
 			expect(revisions.modelId).to.equal(1);
 			expect(revisions.modelId2).to.equal(2);
+		});
+		it('should log the revision to a 3 composite key instance', async () => {
+			Table = sequelize.model('ThreeKey');
+			await CentralLog.addHistory(Table, {
+				hasCompositeKey: true,
+				thirdCompositeKey: true,
+			});
+			const table = await Table.create({
+				id1: 1,
+				id2: 2,
+				id3: 3,
+				name: 'OtherBob',
+			});
+			const revisions = await Revision.findByPk(1);
+			expect(table);
+			expect(revisions);
+			expect(revisions.modelId).to.equal(1);
+			expect(revisions.modelId2).to.equal(2);
+			expect(revisions.modelId3).to.equal(3);
 		});
 	});
 	describe('Exclude Attributes from diff', () => {
