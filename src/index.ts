@@ -185,6 +185,7 @@ export class SequelizeCentralLog {
 			exclude?: string[];
 			hasCompositeKey?: boolean;
 			thirdCompositeKey?: boolean;
+			disableHistoryAutoHook?: boolean;
 		},
 	): Promise<void> {
 		if (this.configuration.debug) {
@@ -235,10 +236,18 @@ export class SequelizeCentralLog {
 		model.addHook('afterCreate', this.createAfterHook('create'));
 		model.addHook('afterUpdate', this.createAfterHook('update'));
 		model.addHook('afterDestroy', this.createAfterHook('destroy'));
+		model.addHook('beforeBulkCreate', this.bulkCreateHook);
+		model.addHook('beforeBulkUpdate', this.bulkUpdateDestroyHook);
+		model.addHook('beforeBulkDestroy', this.bulkUpdateDestroyHook);
 
 		const scope: { [key: string]: string | number | { [Op.col]: any } } = {
 			model: Model.name,
 		};
+
+		if (options?.disableHistoryAutoHook) {
+			model['disableAutoHistoryIndivudualHook'] = true;
+		}
+
 		if (options?.hasCompositeKey) {
 			if (primaryKeys.length < 2) {
 				throw new Error(
@@ -299,6 +308,26 @@ export class SequelizeCentralLog {
 		throw new Error(
 			`This is a read-only revision table. You cannot update/destroy records.`,
 		);
+	}
+
+	private bulkCreateHook(instances, options) {
+		if (
+			!options.individualHooks &&
+			!instances.some(
+				(instance) => instance.constructor.disableAutoHistoryIndivudualHook,
+			)
+		) {
+			options.individualHooks = true;
+		}
+	}
+
+	private bulkUpdateDestroyHook(options) {
+		if (
+			!options.individualHooks &&
+			!options.model.disableAutoHistoryIndivudualHook
+		) {
+			options.individualHooks = true;
+		}
 	}
 
 	private createBeforeHook(operation: string) {

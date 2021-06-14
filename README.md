@@ -15,6 +15,7 @@ Can be used with Sequelize-typescript as well.
   * [Exclude Columns](#excluding-columns)
   * [Composite Keys](#composite-keys)
   * [Tracking Author](#tracking-author)
+  * [Bulk Actions](#bulk-actions)
 * [Options](#options)
 * [Support](#support)
 * [Author](#author)
@@ -87,12 +88,18 @@ model while a column excluded when adding history to the model will be excluded 
 
 ### Composite Keys
 You can use composite keys while tracking history. Current limitations are limited to 2 keys currently. 
-The second key is tracked in a column added to the revision table modelId2, (which you can override the column name).
+The second key is tracked in a column added to the revision table modelId2, (which you can override the column name). A 
+Third Composite key works the same with a default of modelId3.
 
-This is configured by passing the option when creating the log and then per model.
+This is configured by passing the option when creating the log and then per model. 
 ```typescript
 const centralLog = new SequelizeCentralLog(sequelizeDB, {useCompositeKeys: true});
 centralLog.addHistory(Model, { hasCompositeKey: true });
+
+/**
+ * For a Third Composite Key
+ */
+centralLog.addHistory(Model, { hasCompositeKey: true, thirdCompositeKey: true });
 ```
 
 This will still create the hasMany association on the model and will pull back the revisions. YAY!
@@ -131,7 +138,12 @@ nameSpace.run(() => {
 Model.update({...values}, {userId: userID});
 
 ```
+### Bulk Actions
+By default Sequelize Central Log will track bulk actions. You can disable this on a per model basis.
 
+```typescript
+CentralLog.hasHistory(Model, {disableHistoryAutoHook: true});
+```
 
 ## Options
 | Option                                | Type          | Default Value                                                                                                         | Description                                                                                                                                                                                                            |

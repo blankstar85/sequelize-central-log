@@ -1,6 +1,6 @@
 import 'mocha';
 import { expect } from 'chai';
-import { DataTypes, Sequelize } from 'sequelize';
+import { DataTypes, Op, Sequelize } from 'sequelize';
 import { SequelizeCentralLog } from './index';
 import { createNamespace } from 'cls-hooked';
 import { describe } from 'mocha';
@@ -147,10 +147,90 @@ describe('SequelizeCentralLog', () => {
 				expect(revisions[1].diff).to.eql({ name: 'dave', value: true });
 			}
 		});
-		// TODO implement Bulk options
-		it('on bulkcreate it should log revisions');
-		it('on bulkdelete it should log a revision');
-		it('on bulkupdate it should log a revision');
+	});
+	describe('Bulk Changes to Models', () => {
+		let CentralLog;
+		let Revision;
+		let Table;
+		beforeEach(async () => {
+			Table = sequelize.model('PrimaryKey');
+			CentralLog = new SequelizeCentralLog(sequelize, {
+				enableRevisionAttributeMigration: true,
+				enableMigration: true,
+			});
+			Revision = await CentralLog.defineModels();
+		});
+		it('on bulkcreate it should log revisions', async () => {
+			await CentralLog.addHistory(Table);
+			const tables = await Table.bulkCreate([
+				{ name: 'Dave' },
+				{ name: 'Bob' },
+				{ name: 'george' },
+			]);
+			const revisions = await Revision.findAll();
+			expect(tables);
+			expect(revisions.length).to.equal(3);
+			expect(
+				revisions.map((instance) => {
+					return instance.diff[0];
+				}),
+			).to.eql([
+				{ key: 'name', values: { old: null, new: 'Dave' } },
+				{ key: 'name', values: { old: null, new: 'Bob' } },
+				{ key: 'name', values: { old: null, new: 'george' } },
+			]);
+		});
+		it('on bulkdelete it should log a revision', async () => {
+			await CentralLog.addHistory(Table);
+			const tables = await Table.bulkCreate([
+				{ name: 'Dave' },
+				{ name: 'Bob' },
+				{ name: 'george' },
+			]);
+			await Table.destroy({ where: { id: { [Op.lte]: 3 } } });
+			const revisions = await Revision.findAll();
+			expect(tables);
+			expect(revisions);
+			expect(revisions.length).to.equal(6);
+		});
+		it('on bulkupdate it should log a revision', async () => {
+			await CentralLog.addHistory(Table);
+			const tables = await Table.bulkCreate([
+				{ name: 'Dave' },
+				{ name: 'Bob' },
+				{ name: 'george' },
+			]);
+			await Table.update(
+				{ value: true },
+				{ where: { id: { [Op.in]: [1, 2, 3] } } },
+			);
+			const revisions = await Revision.findAll();
+			expect(tables);
+			expect(revisions);
+			expect(revisions.length).to.equal(6);
+			expect(revisions[5].diff).to.eql([
+				{ key: 'value', values: { new: true, old: null } },
+			]);
+		});
+		it('on bulk create/update/delete it should not log, disableHistoryAutoHook', async () => {
+			await CentralLog.addHistory(Table, {
+				disableHistoryAutoHook: true,
+			});
+			const tables = await Table.bulkCreate([
+				{ name: 'Dave' },
+				{ name: 'Bob' },
+				{ name: 'george' },
+			]);
+			await Table.update(
+				{ value: true },
+				{ where: { id: { [Op.in]: [1, 2, 3] } } },
+			);
+			await Table.destroy({ where: { id: { [Op.lte]: 3 } } });
+			const revisions = await Revision.findAll();
+			expect(tables);
+			expect(revisions);
+			expect(revisions.length).to.equal(0);
+		});
 	});
 	describe('Will not log Revision', () => {
 		let CentralLog;
