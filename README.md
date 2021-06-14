@@ -22,10 +22,10 @@ Can be used with Sequelize-typescript as well.
 
 ## Install
 
-[npm][]:
+To install run the following npm command: 
 
 ```sh
-npm install email-templates pug
+npm install sequelize-central-log
 ```
 
 
@@ -46,7 +46,7 @@ well as defineModels() to setup the revision model, which should be done after i
 
 ```typescript
 import { SequelizeCentralLog } from 'sequelize-central-log';
-const options = {....}; // define options from list below
+const options = {...}; // define options from list below
 const centralLog = new SequelizeCentralLog(sequelize, options);
 const Revision = centralLog.defineModels(); // returns your revision model instance for querying
 ```
@@ -120,15 +120,15 @@ const nameSpace = createNamespace('amespaceName');
 nameSpace.run(() => {
   nameSpace.set('keyName', userID);
   // somehwere in your async chain..
-  Model.update(..);
-  Model.create(..);
+  Model.update(...{});
+  Model.create(...{});
 });
 
 /**
  * OR
  */
 
-Model.update({..values}, {userId: userID});
+Model.update({...values}, {userId: userID});
 
 ```
 
