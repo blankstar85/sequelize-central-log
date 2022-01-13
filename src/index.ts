@@ -2,7 +2,6 @@ import {
 	DataTypes,
 	Model,
 	ModelAttributes,
-	ModelCtor,
 	ModelStatic,
 	Op,
 	Sequelize,
@@ -73,7 +72,7 @@ export class SequelizeCentralLog {
 		underscoredAttributes: false,
 		userModel: null,
 	};
-	private revisionModel: ModelCtor<Model<any>>;
+	private revisionModel: ModelStatic<any>;
 
 	constructor(
 		private sequelizeDB: Sequelize,
@@ -99,7 +98,7 @@ export class SequelizeCentralLog {
 	 * Setup Revision Model and returns Revision Model.
 	 * @returns ModelCtor<Model<any>> Revision Model for querying change data
 	 */
-	public async defineModels(): Promise<ModelCtor<Model<any>>> {
+	public async defineModels(): Promise<ModelStatic<any>> {
 		// set revision Model in sequelize.
 		const attributes: ModelAttributes = {
 			model: {
@@ -180,7 +179,7 @@ export class SequelizeCentralLog {
 	 * @param options Model level Options exclude removes columns on model only, hasCompositeKey enables multi key tracking, thirdCompositeKeyCount if it has three keys
 	 */
 	public async addHistory(
-		model: ModelCtor<Model<any>>,
+		model: ModelStatic<any>,
 		options?: {
 			exclude?: string[];
 			hasCompositeKey?: boolean;
