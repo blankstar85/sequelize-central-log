@@ -33,7 +33,6 @@
     "sequelize": "^6.13.0"
   },
   "devDependencies": {
-<<<<<<< HEAD
     "@types/chai": "^4.3.0",
     "@types/cls-hooked": "^4.3.3",
     "@types/mocha": "^9.0.0",
@@ -52,26 +51,6 @@
     "sqlite3": "^5.0.2",
     "ts-node": "^10.4.0",
     "typescript": "^4.5.4"
-=======
-    "@types/chai": "~4.2.22",
-    "@types/cls-hooked": "^4.3.3",
-    "@types/mocha": "9.0.0",
-    "@types/node": "^14.14.31",
-    "@typescript-eslint/eslint-plugin": "^5.6.0",
-    "@typescript-eslint/parser": "^5.6.0",
-    "chai": "^4.3.4",
-    "eslint": "^8.4.1",
-    "eslint-config-prettier": "^8.3.0",
-    "eslint-plugin-prettier": "^4.0.0",
-    "husky": "^7.0.4",
-    "lint-staged": "^12.1.2",
-    "mocha": "^9.1.3",
-    "prettier": "^2.5.1",
-    "release-it": "^14.11.8",
-    "sqlite3": "^5.0.2",
-    "ts-node": "^10.4.0",
-    "typescript": "^4.5.3"
->>>>>>> 556d05e23dc9a388ec6249e3817a87a697e9b260
   },
   "eslintConfig": {
     "parser": "@typescript-eslint/parser",
