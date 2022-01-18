@@ -30,7 +30,7 @@
   "private": false,
   "dependencies": {
     "cls-hooked": "^4.2.2",
-    "sequelize": "^6.13.0"
+    "sequelize": "6.6.2"
   },
   "devDependencies": {
     "@types/chai": "^4.3.0",
