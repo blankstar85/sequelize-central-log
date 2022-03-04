@@ -1,9 +1,15 @@
 import 'mocha';
 import { expect } from 'chai';
-import { DataTypes, Op, Sequelize } from 'sequelize';
+import { DataTypes, Model, Op, Optional, Sequelize } from 'sequelize';
 import { SequelizeCentralLog } from './index';
 import { createNamespace } from 'cls-hooked';
 import { describe } from 'mocha';
+
+interface TableClassAttributes {
+	id: string;
+	name: string;
+}
+type TableClassAttributesCreate = Optional<TableClassAttributes, 'id'>;
 
 // Common Reduce function for column names
 const reduceArray = (
@@ -20,6 +26,7 @@ describe('SequelizeCentralLog', () => {
 	beforeEach(async () => {
 		// DB Setup
 		sequelize = new Sequelize('sqlite::memory:', { logging: false });
+
 		sequelize.define('User', {
 			name: {
 				type: DataTypes.STRING,
@@ -83,7 +90,6 @@ describe('SequelizeCentralLog', () => {
 		});
 		await sequelize.sync();
 	});
-
 	describe('Changes to Models', () => {
 		let CentralLog;
 		let Revision;
@@ -493,6 +499,44 @@ describe('SequelizeCentralLog', () => {
 				expect(revisionStillExist);
 			}
 			expect(errors).to.equal(2);
+		});
+	});
+	describe('Should work with ES6 classes', () => {
+		let CentralLog;
+		let Revision;
+		it('Should work with ES6 classes', async () => {
+			CentralLog = new SequelizeCentralLog(sequelize, {
+				enableRevisionAttributeMigration: true,
+				enableMigration: true,
+			});
+			class TestModel extends Model<
+				TableClassAttributes,
+				TableClassAttributesCreate
+			> {
+				public id: number;
+				public name: string;
+				public revision: number;
+			}
+			TestModel.init(
+				{
+					id: {
+						type: DataTypes.INTEGER,
+						allowNull: false,
+						primaryKey: true,
+						autoIncrement: true,
+					},
+					name: DataTypes.STRING,
+				},
+				{ sequelize, freezeTableName: true },
+			);
+			await sequelize.sync();
+			Revision = await CentralLog.defineModels();
+			await CentralLog.addHistory(TestModel);
+			const table = await TestModel.create({ name: 'bob' });
+			const revision = await Revision.findAll();
+			expect(table);
+			expect(table.revision).to.equal(0);
+			expect(revision.length).to.equal(1);
 		});
 	});
 });
