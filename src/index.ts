@@ -7,6 +7,7 @@ import {
 	Sequelize,
 } from 'sequelize';
 import { createNamespace, getNamespace, Namespace } from 'cls-hooked';
+import { ModelDefined } from 'sequelize/types/model';
 
 interface ConfigOptions {
 	attributeModelId: string;
@@ -179,7 +180,7 @@ export class SequelizeCentralLog {
 	 * @param options Model level Options exclude removes columns on model only, hasCompositeKey enables multi key tracking, thirdCompositeKeyCount if it has three keys
 	 */
 	public async addHistory(
-		model: ModelStatic<any>,
+		model: ModelDefined<any, any>,
 		options?: {
 			exclude?: string[];
 			hasCompositeKey?: boolean;
