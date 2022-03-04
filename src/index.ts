@@ -1,11 +1,4 @@
-import {
-	DataTypes,
-	Model,
-	ModelAttributes,
-	ModelStatic,
-	Op,
-	Sequelize,
-} from 'sequelize';
+import { DataTypes, Model, ModelAttributes, Op, Sequelize } from 'sequelize';
 import { createNamespace, getNamespace, Namespace } from 'cls-hooked';
 import { ModelDefined } from 'sequelize/types/model';
 
@@ -31,7 +24,7 @@ interface ConfigOptions {
 	useCompositeKeys: boolean;
 	underscored: boolean;
 	underscoredAttributes: boolean;
-	userModel: ModelStatic<any> | null;
+	userModel: ModelDefined<any, any> | null;
 }
 
 export type CentralLogOptions = Partial<ConfigOptions>;
@@ -73,7 +66,7 @@ export class SequelizeCentralLog {
 		underscoredAttributes: false,
 		userModel: null,
 	};
-	private revisionModel: ModelStatic<any>;
+	private revisionModel: ModelDefined<any, any>;
 
 	constructor(
 		private sequelizeDB: Sequelize,
@@ -97,9 +90,9 @@ export class SequelizeCentralLog {
 
 	/**
 	 * Setup Revision Model and returns Revision Model.
-	 * @returns ModelCtor<Model<any>> Revision Model for querying change data
+	 * @returns ModelDefined<any, any> Revision Model for querying change data
 	 */
-	public async defineModels(): Promise<ModelStatic<any>> {
+	public async defineModels(): Promise<ModelDefined<any, any>> {
 		// set revision Model in sequelize.
 		const attributes: ModelAttributes = {
 			model: {
