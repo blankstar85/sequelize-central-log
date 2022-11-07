@@ -238,7 +238,7 @@ export class SequelizeCentralLog {
 		};
 
 		if (options?.disableHistoryAutoHook) {
-			model['disableAutoHistoryIndivudualHook'] = true;
+			model['disableAutoHistoryIndividualHook'] = true;
 		}
 
 		if (options?.hasCompositeKey) {
@@ -307,7 +307,7 @@ export class SequelizeCentralLog {
 		if (
 			!options.individualHooks &&
 			!instances.some(
-				(instance) => instance.constructor.disableAutoHistoryIndivudualHook,
+				(instance) => instance.constructor.disableAutoHistoryIndividualHook,
 			)
 		) {
 			options.individualHooks = true;
@@ -317,7 +317,7 @@ export class SequelizeCentralLog {
 	private bulkUpdateDestroyHook(options) {
 		if (
 			!options.individualHooks &&
-			!options.model.disableAutoHistoryIndivudualHook
+			!options.model.disableAutoHistoryIndividualHook
 		) {
 			options.individualHooks = true;
 		}
