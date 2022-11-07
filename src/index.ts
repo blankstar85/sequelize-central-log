@@ -1,6 +1,9 @@
 import { DataTypes, Model, ModelAttributes, Op, Sequelize } from 'sequelize';
 import { createNamespace, getNamespace, Namespace } from 'cls-hooked';
-import { ModelDefined } from 'sequelize/types/model';
+import {
+	ModelDefined,
+	Logging as OriginalLogging,
+} from 'sequelize/types/model';
 
 interface ConfigOptions {
 	attributeModelId: string;
@@ -25,6 +28,22 @@ interface ConfigOptions {
 	underscored: boolean;
 	underscoredAttributes: boolean;
 	userModel: ModelDefined<any, any> | null;
+}
+
+// Add Typings for noHistory and userId on options.
+declare module 'sequelize' {
+	// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+	// @ts-ignore
+	export interface Logging extends OriginalLogging {
+		/**
+		 * Don't Track revision for this instance. defaults false.
+		 */
+		noHistory?: boolean;
+		/**
+		 * Foreign Primary Key for user id INT
+		 */
+		userId?: number;
+	}
 }
 
 export type CentralLogOptions = Partial<ConfigOptions>;
