@@ -71,13 +71,22 @@
   },
   "husky": {
     "hooks": {
-      "pre-commit": "lint-staged"
+      "pre-commit": "lint-staged",
     }
   },
   "lint-staged": {
     "*.{js,ts,tsx}": [
       "eslint --fix"
     ]
+  },
+  "release-it": {
+    "hooks": {
+      "before:init": ["npm run lint", "npm run test"],
+      "after:bump": "npm run build"
+    },
+    "github": {
+      "release": true
+    }
   },
   "prettier": {
     "arrowParens": "always",
