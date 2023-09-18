@@ -1,4 +1,11 @@
-import { DataTypes, Model, ModelAttributes, Op, Sequelize } from 'sequelize';
+import {
+	DataType,
+	DataTypes,
+	Model,
+	ModelAttributes,
+	Op,
+	Sequelize,
+} from 'sequelize';
 import { createNamespace, getNamespace, Namespace } from 'cls-hooked';
 import {
 	ModelDefined,
@@ -23,6 +30,7 @@ interface ConfigOptions {
 	freezeTableName: boolean;
 	log: any;
 	mysql: boolean;
+	primaryKeyType: DataType;
 	trackFullModel: boolean;
 	useCompositeKeys: boolean;
 	underscored: boolean;
@@ -79,6 +87,7 @@ export class SequelizeCentralLog {
 		freezeTableName: false,
 		log: console.log,
 		mysql: false,
+		primaryKeyType: DataTypes.INTEGER,
 		trackFullModel: false,
 		useCompositeKeys: false,
 		underscored: false,
@@ -119,15 +128,15 @@ export class SequelizeCentralLog {
 				allowNull: false,
 			},
 			[this.configuration.attributeModelId]: {
-				type: DataTypes.INTEGER,
+				type: this.configuration.primaryKeyType,
 				allowNull: false,
 			},
 			[this.configuration.attributeModelId2]: {
-				type: DataTypes.INTEGER,
+				type: this.configuration.primaryKeyType,
 				allowNull: true,
 			},
 			[this.configuration.attributeModelId3]: {
-				type: DataTypes.INTEGER,
+				type: this.configuration.primaryKeyType,
 				allowNull: true,
 			},
 			[this.configuration.attributeUserId]: {
