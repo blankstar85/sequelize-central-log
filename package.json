@@ -15,8 +15,13 @@
   },
   "keywords": [
     "sequelize",
-    "sequelize history",
-    "sequelize papertrail"
+    "revision",
+    "history",
+    "audit",
+    "papertrail",
+    "tracking",
+    "log",
+    "trail"
   ],
   "author": "blankstar85",
   "license": "MIT",
