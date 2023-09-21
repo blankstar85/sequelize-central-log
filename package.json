@@ -35,13 +35,13 @@
   "private": false,
   "peerDependencies": {
     "cls-hooked": "^4.2.2",
-    "sequelize": ">=6.8.0"
+    "sequelize": "^6.33.0"
   },
   "devDependencies": {
     "@types/chai": "^4.3.6",
     "@types/cls-hooked": "^4.3.6",
     "@types/mocha": "^10.0.1",
-    "@types/node": "16.11.68",
+    "@types/node": "14.18.62",
     "@typescript-eslint/eslint-plugin": "^5.49.0",
     "@typescript-eslint/parser": "^5.49.0",
     "chai": "^4.3.8",
@@ -55,7 +55,7 @@
     "release-it": "^16.1.5",
     "sqlite3": "^5.1.6",
     "ts-node": "^10.9.1",
-    "typescript": "^5.2.2"
+    "typescript": "5.2.2"
   },
   "eslintConfig": {
     "parser": "@typescript-eslint/parser",
@@ -74,7 +74,8 @@
   },
   "husky": {
     "hooks": {
-      "pre-commit": "lint-staged"
+      "pre-commit": "lint-staged",
+      "pre-push": "npm run test"
     }
   },
   "lint-staged": {
