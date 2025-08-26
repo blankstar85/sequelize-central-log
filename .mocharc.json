@@ -1,0 +1,6 @@
+{
+  "extension": ["ts"],
+	"reporter": "spec",
+  "spec": ["src/**/*.spec.ts"],
+	"import": "tsx"
+}

@@ -1,16 +1,6 @@
-import {
-	DataType,
-	DataTypes,
-	Model,
-	ModelAttributes,
-	Op,
-	Sequelize,
-} from 'sequelize';
+import { DataType, DataTypes, Model, ModelAttributes, Op, Sequelize } from 'sequelize';
 import { createNamespace, getNamespace, Namespace } from 'cls-hooked';
-import {
-	ModelDefined,
-	Logging as OriginalLogging,
-} from 'sequelize/types/model';
+import { ModelDefined, Logging as OriginalLogging } from 'sequelize/types/model';
 
 interface ConfigOptions {
 	attributeModelId: string;
@@ -85,6 +75,7 @@ export class SequelizeCentralLog {
 		],
 		failHard: false,
 		freezeTableName: false,
+		// eslint-disable-next-line no-console
 		log: console.log,
 		mysql: false,
 		primaryKeyType: DataTypes.INTEGER,
@@ -244,9 +235,7 @@ export class SequelizeCentralLog {
 						defaultValue: 0,
 					});
 				} catch (error) {
-					this.log(
-						`Error occured while adding revisionAttribute to ${tableName}.. ${error}`,
-					);
+					this.log(`Error occured while adding revisionAttribute to ${tableName}.. ${error}`);
 				}
 			}
 		}
@@ -295,14 +284,11 @@ export class SequelizeCentralLog {
 		}
 
 		// Add association to revision.
-		model.hasMany(
-			this.sequelizeDB.models[this.configuration.attributeRevisionModel],
-			{
-				foreignKey: this.configuration.attributeModelId,
-				constraints: false,
-				scope,
-			},
-		);
+		model.hasMany(this.sequelizeDB.models[this.configuration.attributeRevisionModel], {
+			foreignKey: this.configuration.attributeModelId,
+			constraints: false,
+			scope,
+		});
 	}
 
 	private getPrimaryKeys(instance: any): string[] {
@@ -326,27 +312,20 @@ export class SequelizeCentralLog {
 	}
 
 	private readOnlyHook() {
-		throw new Error(
-			`This is a read-only revision table. You cannot update/destroy records.`,
-		);
+		throw new Error(`This is a read-only revision table. You cannot update/destroy records.`);
 	}
 
 	private bulkCreateHook(instances, options) {
 		if (
 			!options.individualHooks &&
-			!instances.some(
-				(instance) => instance.constructor.disableAutoHistoryIndividualHook,
-			)
+			!instances.some((instance) => instance.constructor.disableAutoHistoryIndividualHook)
 		) {
 			options.individualHooks = true;
 		}
 	}
 
 	private bulkUpdateDestroyHook(options) {
-		if (
-			!options.individualHooks &&
-			!options.model.disableAutoHistoryIndividualHook
-		) {
+		if (!options.individualHooks && !options.model.disableAutoHistoryIndividualHook) {
 			options.individualHooks = true;
 		}
 	}
@@ -371,22 +350,16 @@ export class SequelizeCentralLog {
 			// Filter columns from data that we don't care to track.
 			const diffValuesToRead = changedValues.filter(
 				(value) =>
-					![
-						...this.configuration.exclude,
-						...instance.constructor.modelLevelExclude,
-					].some((filterValue) => filterValue === value),
+					![...this.configuration.exclude, ...instance.constructor.modelLevelExclude].some(
+						(filterValue) => filterValue === value,
+					),
 			);
 			this.removeKeys(currentVersion, instance);
 			this.removeKeys(previousVersion, instance);
 
 			// Don't allow revision to be modified.
-			instance.set(
-				this.configuration.attributeRevision,
-				instance._previousDataValues['revision'],
-			);
-			const currentRevision = instance.get(
-				this.configuration.attributeRevision,
-			);
+			instance.set(this.configuration.attributeRevision, instance._previousDataValues['revision']);
+			const currentRevision = instance.get(this.configuration.attributeRevision);
 
 			if (this.configuration.debug) {
 				this.log(`BeforeHook Called on instance: ${modelName}`);
@@ -450,13 +423,10 @@ export class SequelizeCentralLog {
 
 			if (
 				instance.context &&
-				((instance.context.diff && instance.context.diff.length > 0) ||
-					destroyOperation)
+				((instance.context.diff && instance.context.diff.length > 0) || destroyOperation)
 			) {
 				const diff = instance.context.diff;
-				const currentRevision = instance.get(
-					this.configuration.attributeRevision,
-				);
+				const currentRevision = instance.get(this.configuration.attributeRevision);
 				const revisionValues = {
 					model: modelName,
 					[this.configuration.attributeModelId]: instance.get(primaryKeys[0]),
@@ -473,21 +443,12 @@ export class SequelizeCentralLog {
 				// Opt params take precedent.
 				if (this.configuration.userModel) {
 					revisionValues[this.configuration.attributeUserId] =
-						opt.userId ||
-						(this.ns && this.ns.get(this.configuration.continuationKey)) ||
-						null;
+						opt.userId || (this.ns && this.ns.get(this.configuration.continuationKey)) || null;
 				}
-				if (
-					this.configuration.useCompositeKeys &&
-					instance.constructor.usesCompositeKeys
-				) {
-					revisionValues[this.configuration.attributeModelId2] = instance.get(
-						primaryKeys[1],
-					);
+				if (this.configuration.useCompositeKeys && instance.constructor.usesCompositeKeys) {
+					revisionValues[this.configuration.attributeModelId2] = instance.get(primaryKeys[1]);
 					if (instance.constructor.thirdCompositeKey) {
-						revisionValues[this.configuration.attributeModelId3] = instance.get(
-							primaryKeys[2],
-						);
+						revisionValues[this.configuration.attributeModelId3] = instance.get(primaryKeys[2]);
 					}
 				}
 

@@ -9,9 +9,11 @@
   "types": "lib/index.d.ts",
   "scripts": {
     "build": "tsc",
-    "lint": "eslint src/**/*.{js,ts,tsx} --quiet --fix",
+    "lint": "eslint",
+    "lint:fix":  "eslint --fix",
+    "prepare": "simple-git-hooks",
     "release": "release-it",
-    "test": "mocha -r ts-node/register src/**/*.spec.ts"
+    "test": "mocha"
   },
   "keywords": [
     "sequelize",
@@ -35,52 +37,34 @@
   "private": false,
   "peerDependencies": {
     "cls-hooked": "^4.2.2",
-    "sequelize": "^6.33.0"
+    "sequelize": "^6.37.7"
   },
   "devDependencies": {
-    "@types/chai": "^4.3.6",
-    "@types/cls-hooked": "^4.3.6",
-    "@types/mocha": "^10.0.1",
-    "@types/node": "14.18.62",
-    "@typescript-eslint/eslint-plugin": "^5.49.0",
-    "@typescript-eslint/parser": "^5.49.0",
-    "chai": "^4.3.8",
-    "eslint": "^8.49.0",
-    "eslint-config-prettier": "^8.10.0",
-    "eslint-plugin-prettier": "^4.2.1",
-    "husky": "^8.0.3",
-    "lint-staged": "^13.3.0",
-    "mocha": "^10.2.0",
-    "prettier": "^2.7.1",
-    "release-it": "^16.1.5",
-    "sqlite3": "^5.1.6",
-    "ts-node": "^10.9.1",
-    "typescript": "5.2.2"
+    "@types/chai": "^5.2.2",
+    "@types/cls-hooked": "^4.3.9",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.18.0",
+    "chai": "^6.0.1",
+    "eslint": "^9.34.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-chai-friendly": "^0.8.0",
+    "eslint-plugin-prettier": "^5.5.4",
+    "lint-staged": "^16.1.5",
+    "mocha": "^11.7.1",
+    "prettier": "^3.6.2",
+    "release-it": "^19.0.4",
+    "simple-git-hooks": "^2.13.1",
+    "sqlite3": "^5.1.7",
+    "tsx": "^4.20.5",
+    "typescript": "5.9.2",
+    "typescript-eslint": "^8.41.0"
   },
-  "eslintConfig": {
-    "parser": "@typescript-eslint/parser",
-    "parserOptions": {
-      "ecmaVersion": 2017,
-      "sourceType": "module"
-    },
-    "extends": [
-      "plugin:@typescript-eslint/recommended",
-      "plugin:prettier/recommended",
-      "prettier"
-    ],
-    "rules": {
-      "no-console": "off"
-    }
-  },
-  "husky": {
-    "hooks": {
-      "pre-commit": "lint-staged",
-      "pre-push": "npm run test"
-    }
+  "simple-git-hooks": {
+    "pre-commit": "npx lint-staged"
   },
   "lint-staged": {
-    "*.{js,ts,tsx}": [
-      "eslint --fix"
+    "*.{js,ts}": [
+      "npm run lint:fix"
     ]
   },
   "release-it": {
@@ -101,7 +85,7 @@
     "endOfLine": "auto",
     "htmlWhitespaceSensitivity": "css",
     "insertPragma": false,
-    "printWidth": 80,
+    "printWidth": 100,
     "proseWrap": "preserve",
     "quoteProps": "as-needed",
     "requirePragma": false,

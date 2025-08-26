@@ -12,9 +12,7 @@ interface TableClassAttributes {
 type TableClassAttributesCreate = Optional<TableClassAttributes, 'id'>;
 
 // Common Reduce function for column names
-const reduceArray = (
-	array: { key: string; values: { new: any; old; any } }[],
-) => {
+const reduceArray = (array: { key: string; values: { new: any; old; any } }[]) => {
 	return array.reduce((keyArray, currentkey) => {
 		keyArray[currentkey.key] = currentkey.key;
 		return keyArray;
@@ -135,9 +133,7 @@ describe('SequelizeCentralLog', () => {
 			expect(revisions.map((value) => value.revision)).eql([0, 1, 2]);
 			expect(revisions[2]);
 			if (revisions[2]) {
-				expect(revisions[2].diff).to.eql([
-					{ key: 'name', values: { old: 'bob', new: 'viviana' } },
-				]);
+				expect(revisions[2].diff).to.eql([{ key: 'name', values: { old: 'bob', new: 'viviana' } }]);
 				expect(revisions[2].revision).to.equal(2);
 			}
 		});
@@ -206,17 +202,12 @@ describe('SequelizeCentralLog', () => {
 				{ name: 'Bob' },
 				{ name: 'george' },
 			]);
-			await Table.update(
-				{ value: true },
-				{ where: { id: { [Op.in]: [1, 2, 3] } } },
-			);
+			await Table.update({ value: true }, { where: { id: { [Op.in]: [1, 2, 3] } } });
 			const revisions = await Revision.findAll();
 			expect(tables);
 			expect(revisions);
 			expect(revisions.length).to.equal(6);
-			expect(revisions[5].diff).to.eql([
-				{ key: 'value', values: { new: true, old: null } },
-			]);
+			expect(revisions[5].diff).to.eql([{ key: 'value', values: { new: true, old: null } }]);
 		});
 		it('on bulk create/update/delete it should not log, disableHistoryAutoHook', async () => {
 			await CentralLog.addHistory(Table, {
@@ -227,10 +218,7 @@ describe('SequelizeCentralLog', () => {
 				{ name: 'Bob' },
 				{ name: 'george' },
 			]);
-			await Table.update(
-				{ value: true },
-				{ where: { id: { [Op.in]: [1, 2, 3] } } },
-			);
+			await Table.update({ value: true }, { where: { id: { [Op.in]: [1, 2, 3] } } });
 			await Table.destroy({ where: { id: { [Op.lte]: 3 } } });
 			const revisions = await Revision.findAll();
 			expect(tables);
@@ -255,15 +243,12 @@ describe('SequelizeCentralLog', () => {
 			let table;
 			try {
 				table = await sequelize.transaction(async (t) => {
-					const table = await Table.create(
-						{ name: 'bob', value: 'true' },
-						{ transaction: t },
-					);
+					const table = await Table.create({ name: 'bob', value: 'true' }, { transaction: t });
 					await table.update({ name: 'bobs' });
 					throw new Error();
 				});
 			} catch (error) {
-				// die silently, we know}
+				expect(error).to.not.equal(undefined);
 			}
 			const revisions = await Revision.findAll();
 			expect(revisions.length).to.equal(0);
@@ -311,17 +296,11 @@ describe('SequelizeCentralLog', () => {
 			});
 		});
 		it('use userId from model options to log user id, should override namespace', async () => {
-			const user2 = await User.create(
-				{ name: 'OtherBob' },
-				{ noHistory: true },
-			);
+			const user2 = await User.create({ name: 'OtherBob' }, { noHistory: true });
 			const ns = createNamespace('nameSpaceKey');
 			ns.run(async () => {
 				ns.set('userId', 1);
-				const table = await Table.create(
-					{ name: 'Bobs Cousin', value: true },
-					{ userId: 2 },
-				);
+				const table = await Table.create({ name: 'Bobs Cousin', value: true }, { userId: 2 });
 				const revisions = await Revision.findAll();
 				expect(user2);
 				expect(user);
@@ -422,9 +401,7 @@ describe('SequelizeCentralLog', () => {
 			expect(table.author).to.equal('bob2');
 			expect(revisions.length).to.equal(1);
 			if (revisions) {
-				expect(reduceArray(revisions[0].diff)).to.not.include.any.keys(
-					excludeCentralOptions,
-				);
+				expect(reduceArray(revisions[0].diff)).to.not.include.any.keys(excludeCentralOptions);
 			}
 		});
 		it('should ignore model level excluded attributes', async () => {
@@ -454,9 +431,7 @@ describe('SequelizeCentralLog', () => {
 			expect(table);
 			expect(revisions.length).to.equal(1);
 			if (revisions) {
-				expect(reduceArray(revisions[0].diff)).to.not.include.any.keys([
-					'notID',
-				]);
+				expect(reduceArray(revisions[0].diff)).to.not.include.any.keys(['notID']);
 			}
 		});
 	});
@@ -509,13 +484,10 @@ describe('SequelizeCentralLog', () => {
 				enableRevisionAttributeMigration: true,
 				enableMigration: true,
 			});
-			class TestModel extends Model<
-				TableClassAttributes,
-				TableClassAttributesCreate
-			> {
-				public id: number;
-				public name: string;
-				public revision: number;
+			class TestModel extends Model<TableClassAttributes, TableClassAttributesCreate> {
+				declare public id: number;
+				declare public name: string;
+				declare public revision: number;
 			}
 			TestModel.init(
 				{
