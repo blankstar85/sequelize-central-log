@@ -138,6 +138,15 @@ nameSpace.run(() => {
 Model.update({...values}, {userId: userID});
 
 ```
+
+For when you need to create an entry that is an anonymous user even though the data doesn't gets saved in the table
+the revision history will have it. In order to prevent the user from being logged, used the propery skipLoggingUser
+on the query as a model configuration option.
+ex:
+```typescript
+Model.update({...values}, {skipLoggingUser: true});
+```
+
 ### Bulk Actions
 By default Sequelize Central Log will track bulk actions. You can disable this on a per model basis.
 

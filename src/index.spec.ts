@@ -310,6 +310,23 @@ describe('SequelizeCentralLog', () => {
 				}
 			});
 		});
+		it('while using namespace to record author id, skip logging author id', async () => {
+			const ns = createNamespace('nameSpaceKey');
+			ns.run(async () => {
+				ns.set('userId', 1);
+				const table = await Table.create(
+					{ name: 'bob', value: true },
+					{ skipLoggingUser: true },
+				);
+				const revisions = await Revision.findAll();
+				expect(user.id).to.equal(1);
+				expect(table);
+				expect(revisions.length).to.equal(1);
+				if (revisions[0]) {
+					expect(revisions[0].userId).to.equal(null);
+				}
+			});
+		});
 		it('use userId from model options to log user id, should override namespace', async () => {
 			const user2 = await User.create(
 				{ name: 'OtherBob' },

@@ -51,6 +51,10 @@ declare module 'sequelize' {
 		 * Foreign Primary Key for user id INT
 		 */
 		userId?: number;
+		/**
+		 * Should Skip Logging User, useful for Tables that require Anonymous users.
+		 */
+		skipLoggingUser?: boolean;
 	}
 }
 
@@ -471,7 +475,7 @@ export class SequelizeCentralLog {
 
 				// Set User by Continuation Key, userId set on the Option for the transaction or null if it can't figure it out.
 				// Opt params take precedent.
-				if (this.configuration.userModel) {
+				if (this.configuration.userModel && !opt.skipLoggingUser) {
 					revisionValues[this.configuration.attributeUserId] =
 						opt.userId ||
 						(this.ns && this.ns.get(this.configuration.continuationKey)) ||
