@@ -1,0 +1,38 @@
+import { DataTypes } from 'sequelize';
+import { ConfigOptions } from './types';
+
+export const defaultOptions: ConfigOptions = {
+	attributeModelId: 'modelId',
+	attributeModelId2: 'modelId2',
+	attributeModelId3: 'modelId3',
+	attributeRevision: 'revision',
+	attributeRevisionModel: 'Revision',
+	attributeRevisionModelTableName: 'Revision',
+	attributeUserId: 'userId',
+	continuationKey: 'userId',
+	continuationNamespace: null,
+	debug: false,
+	enableMigration: false,
+	enableRevisionAttributeMigration: false,
+	exclude: [
+		'id',
+		'createdAt',
+		'updatedAt',
+		'deletedAt',
+		'created_at',
+		'updated_at',
+		'deleted_at',
+		'revision',
+	],
+	failHard: false,
+	freezeTableName: false,
+	getUserId: null,
+	log: console.log,
+	mysql: false,
+	primaryKeyType: DataTypes.INTEGER,
+	trackFullModel: false,
+	useCompositeKeys: false,
+	underscored: false,
+	underscoredAttributes: false,
+	userModel: null,
+};

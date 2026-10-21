@@ -2,7 +2,8 @@ import 'mocha';
 import { expect } from 'chai';
 import { DataTypes, Model, Op, Optional, Sequelize } from 'sequelize';
 import { SequelizeCentralLog } from './index';
-import { createNamespace } from 'cls-hooked';
+import { getNamespace } from 'cls-hooked';
+import { AsyncLocalStorage } from 'async_hooks';
 import { describe } from 'mocha';
 
 interface TableClassAttributes {
@@ -25,7 +26,11 @@ describe('SequelizeCentralLog', () => {
 	let sequelize: Sequelize;
 	beforeEach(async () => {
 		// DB Setup
-		sequelize = new Sequelize('sqlite::memory:', { logging: false });
+		sequelize = new Sequelize({
+			dialect: 'sqlite',
+			storage: ':memory:',
+			logging: false,
+		});
 
 		sequelize.define('User', {
 			name: {
@@ -76,6 +81,17 @@ describe('SequelizeCentralLog', () => {
 			},
 			name: {
 				type: DataTypes.STRING,
+			},
+		});
+		sequelize.define('Typed', {
+			count: {
+				type: DataTypes.INTEGER,
+			},
+			flag: {
+				type: DataTypes.BOOLEAN,
+			},
+			meta: {
+				type: DataTypes.JSON,
 			},
 		});
 		sequelize.define('NotIdPrimary', {
@@ -262,8 +278,8 @@ describe('SequelizeCentralLog', () => {
 					await table.update({ name: 'bobs' });
 					throw new Error();
 				});
-			} catch (error) {
-				// die silently, we know}
+			} catch {
+				// die silently, we know
 			}
 			const revisions = await Revision.findAll();
 			expect(revisions.length).to.equal(0);
@@ -292,13 +308,13 @@ describe('SequelizeCentralLog', () => {
 				continuationNamespace: 'nameSpaceKey',
 			});
 			Revision = await CentralLog.defineModels();
-			user = User.create({ name: 'Bob' });
+			user = await User.create({ name: 'Bob' });
 			await CentralLog.addHistory(Table);
 			await CentralLog.addHistory(User);
 		});
 		it('use namespace to record author id', async () => {
-			const ns = createNamespace('nameSpaceKey');
-			ns.run(async () => {
+			const ns: any = getNamespace('nameSpaceKey');
+			await ns.runPromise(async () => {
 				ns.set('userId', 1);
 				const table = await Table.create({ name: 'bob', value: true });
 				const revisions = await Revision.findAll();
@@ -311,8 +327,8 @@ describe('SequelizeCentralLog', () => {
 			});
 		});
 		it('while using namespace to record author id, skip logging author id', async () => {
-			const ns = createNamespace('nameSpaceKey');
-			ns.run(async () => {
+			const ns: any = getNamespace('nameSpaceKey');
+			await ns.runPromise(async () => {
 				ns.set('userId', 1);
 				const table = await Table.create(
 					{ name: 'bob', value: true },
@@ -332,8 +348,8 @@ describe('SequelizeCentralLog', () => {
 				{ name: 'OtherBob' },
 				{ noHistory: true },
 			);
-			const ns = createNamespace('nameSpaceKey');
-			ns.run(async () => {
+			const ns: any = getNamespace('nameSpaceKey');
+			await ns.runPromise(async () => {
 				ns.set('userId', 1);
 				const table = await Table.create(
 					{ name: 'Bobs Cousin', value: true },
@@ -350,7 +366,12 @@ describe('SequelizeCentralLog', () => {
 			});
 		});
 		it('should log null when author cannot be identified', async () => {
-			const table = await Table.create({ name: 'bob', value: true });
+			// cls-hooked can leak contexts from earlier tests into later async continuations.
+			const ns: any = getNamespace('nameSpaceKey');
+			const table = await ns.runPromise(async () => {
+				ns.set('userId', undefined);
+				return Table.create({ name: 'bob', value: true });
+			});
 			const revisions = await Revision.findAll();
 			expect(table);
 			expect(revisions.length).to.equal(1);
@@ -496,7 +517,7 @@ describe('SequelizeCentralLog', () => {
 			let errors = 0;
 			try {
 				revision = await revision.update({ modelId: 3 });
-			} catch (error) {
+			} catch (error: any) {
 				errors = errors + 1;
 				expect(error);
 				expect(error.message).to.equal(
@@ -506,7 +527,7 @@ describe('SequelizeCentralLog', () => {
 			}
 			try {
 				await revision.destroy();
-			} catch (error) {
+			} catch (error: any) {
 				errors = errors + 1;
 				expect(error);
 				expect(error.message).to.equal(
@@ -530,9 +551,9 @@ describe('SequelizeCentralLog', () => {
 				TableClassAttributes,
 				TableClassAttributesCreate
 			> {
-				public id: number;
-				public name: string;
-				public revision: number;
+				declare id: number;
+				declare name: string;
+				declare revision: number;
 			}
 			TestModel.init(
 				{
@@ -554,6 +575,269 @@ describe('SequelizeCentralLog', () => {
 			expect(table);
 			expect(table.revision).to.equal(0);
 			expect(revision.length).to.equal(1);
+		});
+	});
+	describe('Revision Associations', () => {
+		let CentralLog;
+		let Revision;
+		beforeEach(async () => {
+			CentralLog = new SequelizeCentralLog(sequelize, {
+				enableRevisionAttributeMigration: true,
+				enableMigration: true,
+				useCompositeKeys: true,
+			});
+			Revision = await CentralLog.defineModels();
+		});
+		it('should include revisions for the model', async () => {
+			const Table: any = sequelize.model('PrimaryKey');
+			await CentralLog.addHistory(Table);
+			const table = await Table.create({ name: 'dave', value: true });
+			await table.update({ name: 'bob' });
+			const other = await Table.create({ name: 'other' });
+
+			const found: any = await Table.findByPk(table.id, {
+				include: [Revision],
+			});
+			expect(found.Revisions.map((r) => r.revision)).to.have.members([0, 1]);
+			expect(await table.getRevisions()).to.have.length(2);
+			expect(await other.getRevisions()).to.have.length(1);
+		});
+		it('should include revisions for a composite key model', async () => {
+			const Table: any = sequelize.model('TwoKey');
+			await CentralLog.addHistory(Table, { hasCompositeKey: true });
+			await Table.create({ id1: 1, id2: 1, name: 'a' });
+			await Table.create({ id1: 1, id2: 2, name: 'b' });
+
+			const found: any = await Table.findOne({
+				where: { id1: 1, id2: 2 },
+				include: [Revision],
+			});
+			expect(found.Revisions).to.have.length(1);
+			expect(found.Revisions[0].modelId2).to.equal(2);
+		});
+		it('should require useCompositeKeys for hasCompositeKey', async () => {
+			const log = new SequelizeCentralLog(sequelize, {
+				attributeRevisionModel: 'OtherRevision',
+			});
+			await log.defineModels();
+			let error;
+			try {
+				await log.addHistory(sequelize.model('TwoKey'), {
+					hasCompositeKey: true,
+				});
+			} catch (e) {
+				error = e;
+			}
+			expect(error?.message).to.contain('useCompositeKeys');
+		});
+	});
+	describe('Diff Values', () => {
+		let Revision;
+		let Table;
+		beforeEach(async () => {
+			const CentralLog = new SequelizeCentralLog(sequelize, {
+				enableRevisionAttributeMigration: true,
+				enableMigration: true,
+				trackFullModel: true,
+			});
+			Revision = await CentralLog.defineModels();
+			Table = sequelize.model('Typed');
+			await CentralLog.addHistory(Table);
+		});
+		it('should keep falsy old values', async () => {
+			const table = await Table.create({ count: 0, flag: false });
+			await table.update({ count: 5, flag: true });
+			const revisions = await Revision.findAll({ order: [['id', 'ASC']] });
+			expect(revisions[1].diff).to.eql([
+				{ key: 'count', values: { old: 0, new: 5 } },
+				{ key: 'flag', values: { old: false, new: true } },
+			]);
+		});
+		it('should track JSON columns', async () => {
+			const table = await Table.create({ meta: { a: 1 } });
+			await table.update({ meta: { a: 2, tags: ['x'] } });
+			const revisions = await Revision.findAll({ order: [['id', 'ASC']] });
+			expect(revisions[0].diff).to.eql([
+				{ key: 'meta', values: { old: null, new: { a: 1 } } },
+			]);
+			expect(revisions[1].diff).to.eql([
+				{ key: 'meta', values: { old: { a: 1 }, new: { a: 2, tags: ['x'] } } },
+			]);
+			expect(revisions[1].current).to.eql({ meta: { a: 2, tags: ['x'] } });
+		});
+		it('should not log an update without tracked changes', async () => {
+			const table = await Table.create({ count: 1 });
+			await table.update({ count: 1 });
+			expect(await Revision.count()).to.equal(1);
+			expect(table.revision).to.equal(0);
+		});
+	});
+	describe('Custom Revision Attribute', () => {
+		it('should use attributeRevision on the tracked model', async () => {
+			sequelize.define('Versioned', { name: DataTypes.STRING });
+			await sequelize.sync();
+			const CentralLog = new SequelizeCentralLog(sequelize, {
+				enableRevisionAttributeMigration: true,
+				enableMigration: true,
+				attributeRevision: 'version',
+			});
+			const Revision: any = await CentralLog.defineModels();
+			const Table: any = sequelize.model('Versioned');
+			await CentralLog.addHistory(Table);
+
+			const table = await Table.create({ name: 'a' });
+			await table.update({ name: 'b' });
+			await table.reload();
+			expect(table.get('version')).to.equal(1);
+			const revisions = await Revision.findAll({ order: [['id', 'ASC']] });
+			expect(revisions.map((r) => r.version)).to.eql([0, 1]);
+			expect(revisions[1].diff).to.eql([
+				{ key: 'name', values: { old: 'a', new: 'b' } },
+			]);
+		});
+	});
+	describe('Upsert', () => {
+		let Revision;
+		let Table;
+		beforeEach(async () => {
+			const CentralLog = new SequelizeCentralLog(sequelize, {
+				enableRevisionAttributeMigration: true,
+				enableMigration: true,
+			});
+			Revision = await CentralLog.defineModels();
+			Table = sequelize.model('PrimaryKey');
+			await CentralLog.addHistory(Table);
+		});
+		it('should log create and update revisions for upserts by primary key', async () => {
+			await Table.upsert({ id: 1, name: 'dave', value: true });
+			await Table.upsert({ id: 1, name: 'bob', value: true });
+			const revisions = await Revision.findAll({ order: [['id', 'ASC']] });
+			expect(revisions.map((r) => r.operation)).to.eql(['create', 'update']);
+			expect(revisions.map((r) => r.revision)).to.eql([0, 1]);
+			expect(revisions[1].diff).to.eql([
+				{ key: 'name', values: { old: 'dave', new: 'bob' } },
+			]);
+			const table = await Table.findByPk(1);
+			expect(table.revision).to.equal(1);
+		});
+		it('should not log upserts without changes or with noHistory', async () => {
+			await Table.upsert({ id: 1, name: 'dave' });
+			await Table.upsert({ id: 1, name: 'dave' });
+			await Table.upsert({ id: 1, name: 'bob' }, { noHistory: true });
+			expect(await Revision.count()).to.equal(1);
+		});
+	});
+	describe('Transactions and Errors', () => {
+		let Revision;
+		let Table;
+		const setup = async (options = {}) => {
+			const CentralLog = new SequelizeCentralLog(sequelize, {
+				enableRevisionAttributeMigration: true,
+				enableMigration: true,
+				log: () => undefined,
+				...options,
+			});
+			Revision = await CentralLog.defineModels();
+			Table = sequelize.model('PrimaryKey');
+			await CentralLog.addHistory(Table);
+		};
+		it('should write the revision in the same transaction', async () => {
+			await setup();
+			let revisionTransaction;
+			Revision.addHook('beforeCreate', (_revision, options) => {
+				revisionTransaction = options.transaction;
+			});
+			let transaction;
+			await sequelize.transaction(async (t) => {
+				transaction = t;
+				await Table.create({ name: 'bob' }, { transaction: t });
+			});
+			expect(revisionTransaction).to.equal(transaction);
+		});
+		it('should swallow revision errors by default', async () => {
+			await setup();
+			Revision.addHook('beforeCreate', () => {
+				throw new Error('revision failed');
+			});
+			const table = await Table.create({ name: 'bob' });
+			expect(table.id).to.equal(1);
+		});
+		it('should rethrow revision errors with failHard', async () => {
+			await setup({ failHard: true });
+			Revision.addHook('beforeCreate', () => {
+				throw new Error('revision failed');
+			});
+			let error;
+			try {
+				await sequelize.transaction(async (t) => {
+					await Table.create({ name: 'bob' }, { transaction: t });
+				});
+			} catch (e) {
+				error = e;
+			}
+			expect(error?.message).to.equal('revision failed');
+			expect(await Table.count()).to.equal(0);
+		});
+	});
+	describe('Recording Author ID with getUserId', () => {
+		it('should resolve the user from AsyncLocalStorage', async () => {
+			const storage = new AsyncLocalStorage<{ userId: number }>();
+			const User = sequelize.model('User');
+			const CentralLog = new SequelizeCentralLog(sequelize, {
+				enableRevisionAttributeMigration: true,
+				enableMigration: true,
+				userModel: User,
+				getUserId: () => storage.getStore()?.userId,
+			});
+			const Revision: any = await CentralLog.defineModels();
+			const Table: any = sequelize.model('PrimaryKey');
+			await CentralLog.addHistory(Table);
+
+			const alice: any = await User.create({ name: 'Alice' });
+			const bob: any = await User.create({ name: 'Bob' });
+			await storage.run({ userId: alice.id }, async () => {
+				await Table.create({ name: 'a' });
+				await Table.create({ name: 'b' }, { userId: bob.id });
+				await Table.create({ name: 'c' }, { skipLoggingUser: true });
+			});
+			await Table.create({ name: 'd' });
+			const revisions = await Revision.findAll({ order: [['id', 'ASC']] });
+			expect(revisions.map((r) => r.userId)).to.eql([
+				alice.id,
+				bob.id,
+				null,
+				null,
+			]);
+		});
+	});
+	describe('Read-only Revision Model bulk operations', () => {
+		it('should not allow bulk update, bulk destroy or upsert', async () => {
+			const CentralLog = new SequelizeCentralLog(sequelize, {
+				enableRevisionAttributeMigration: true,
+				enableMigration: true,
+			});
+			const Revision: any = await CentralLog.defineModels();
+			const Table: any = sequelize.model('PrimaryKey');
+			await CentralLog.addHistory(Table);
+			await Table.create({ name: 'bob' });
+
+			const attempts = [
+				() => Revision.update({ modelId: 3 }, { where: {} }),
+				() => Revision.destroy({ where: {} }),
+				() => Revision.upsert({ id: 1, model: 'x', modelId: 1 }),
+			];
+			for (const attempt of attempts) {
+				let error;
+				try {
+					await attempt();
+				} catch (e) {
+					error = e;
+				}
+				expect(error?.message).to.equal(
+					'This is a read-only revision table. You cannot update/destroy records.',
+				);
+			}
+			expect(await Revision.count()).to.equal(1);
 		});
 	});
 });
