@@ -3,15 +3,17 @@
   "version": "1.7.4",
   "description": "Maintain a central history of changes to tables ( models ) in sequelize.",
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=22"
   },
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "scripts": {
     "build": "tsc",
-    "lint": "eslint src/**/*.{js,ts,tsx} --quiet --fix",
+    "lint": "eslint src --fix --quiet",
     "release": "release-it",
-    "test": "mocha -r ts-node/register src/**/*.spec.ts"
+    "test": "mocha --import=tsx \"src/**/*.spec.ts\"",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "prepare": "husky"
   },
   "keywords": [
     "sequelize",
@@ -35,48 +37,34 @@
   "private": false,
   "peerDependencies": {
     "cls-hooked": "^4.2.2",
-    "sequelize": "^6.33.0"
+    "sequelize": "^6.37.0"
+  },
+  "peerDependenciesMeta": {
+    "cls-hooked": {
+      "optional": true
+    }
   },
   "devDependencies": {
-    "@types/chai": "^4.3.6",
-    "@types/cls-hooked": "^4.3.6",
-    "@types/mocha": "^10.0.1",
-    "@types/node": "14.18.62",
-    "@typescript-eslint/eslint-plugin": "^5.49.0",
-    "@typescript-eslint/parser": "^5.49.0",
-    "chai": "^4.3.8",
-    "eslint": "^8.49.0",
-    "eslint-config-prettier": "^8.10.0",
-    "eslint-plugin-prettier": "^4.2.1",
-    "husky": "^8.0.3",
-    "lint-staged": "^13.3.0",
-    "mocha": "^10.2.0",
-    "prettier": "^2.7.1",
-    "release-it": "^16.1.5",
-    "sqlite3": "^5.1.6",
-    "ts-node": "^10.9.1",
-    "typescript": "5.2.2"
-  },
-  "eslintConfig": {
-    "parser": "@typescript-eslint/parser",
-    "parserOptions": {
-      "ecmaVersion": 2017,
-      "sourceType": "module"
-    },
-    "extends": [
-      "plugin:@typescript-eslint/recommended",
-      "plugin:prettier/recommended",
-      "prettier"
-    ],
-    "rules": {
-      "no-console": "off"
-    }
-  },
-  "husky": {
-    "hooks": {
-      "pre-commit": "lint-staged",
-      "pre-push": "npm run test"
-    }
+    "@eslint/js": "^10.0.1",
+    "@types/chai": "^5.2.3",
+    "@types/cls-hooked": "^4.3.9",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.20.5",
+    "chai": "^6.3.0",
+    "cls-hooked": "^4.2.2",
+    "eslint": "^10.13.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.7",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.6.0",
+    "mocha": "^12.0.3",
+    "prettier": "^3.9.10",
+    "release-it": "^21.0.3",
+    "sequelize": "^6.37.8",
+    "sqlite3": "^6.0.1",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.72.0"
   },
   "lint-staged": {
     "*.{js,ts,tsx}": [
@@ -87,6 +75,7 @@
     "hooks": {
       "before:init": [
         "npm run lint",
+        "npm run typecheck",
         "npm run test"
       ],
       "after:bump": "npm run build"
@@ -110,5 +99,13 @@
     "tabWidth": 2,
     "trailingComma": "all",
     "useTabs": true
-  }
+  },
+  "overrides": {
+    "release-it": {
+      "undici": "^7.30.1"
+    }
+  },
+  "files": [
+    "lib"
+  ]
 }
