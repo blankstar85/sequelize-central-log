@@ -94,6 +94,18 @@ describe('SequelizeCentralLog', () => {
 				type: DataTypes.JSON,
 			},
 		});
+		sequelize.define('Product', {
+			sku: {
+				type: DataTypes.STRING,
+				unique: true,
+			},
+			qty: {
+				type: DataTypes.INTEGER,
+			},
+			label: {
+				type: DataTypes.STRING,
+			},
+		});
 		sequelize.define('NotIdPrimary', {
 			notID: {
 				type: DataTypes.INTEGER,
@@ -808,6 +820,108 @@ describe('SequelizeCentralLog', () => {
 				null,
 				null,
 			]);
+		});
+	});
+	describe('Bulk create with updateOnDuplicate', () => {
+		let Revision;
+		let Product;
+		const setup = async (options = {}, historyOptions = {}) => {
+			const CentralLog = new SequelizeCentralLog(sequelize, {
+				enableRevisionAttributeMigration: true,
+				enableMigration: true,
+				...options,
+			});
+			Revision = await CentralLog.defineModels();
+			Product = sequelize.model('Product');
+			await CentralLog.addHistory(Product, historyOptions);
+			await Product.bulkCreate([
+				{ id: 1, sku: 'A', qty: 1, label: 'first' },
+				{ id: 2, sku: 'B', qty: 2, label: 'second' },
+			]);
+		};
+		const revisionsAfterSetup = async () =>
+			(await Revision.findAll({ order: [['id', 'ASC']] })).slice(2);
+
+		it('should log updates for rows that conflict on the primary key', async () => {
+			await setup();
+			await Product.bulkCreate(
+				[
+					{ id: 1, sku: 'A', qty: 5 },
+					{ id: 3, sku: 'C', qty: 3 },
+				],
+				{ updateOnDuplicate: ['qty'] },
+			);
+			const revisions = await revisionsAfterSetup();
+			expect(revisions.map((r) => [r.modelId, r.operation, r.revision])).to.eql(
+				[
+					[1, 'update', 1],
+					[3, 'create', 0],
+				],
+			);
+			expect(revisions[0].diff).to.eql([
+				{ key: 'qty', values: { old: 1, new: 5 } },
+			]);
+			expect((await Product.findByPk(1)).revision).to.equal(1);
+			expect((await Product.findByPk(3)).revision).to.equal(0);
+		});
+		it('should log updates for rows that conflict on a unique key', async () => {
+			await setup();
+			await Product.bulkCreate(
+				[
+					{ sku: 'B', qty: 7 },
+					{ sku: 'D', qty: 4 },
+				],
+				{ updateOnDuplicate: ['qty'], conflictAttributes: ['sku'] },
+			);
+			const revisions = await revisionsAfterSetup();
+			const storedD = await Product.findOne({ where: { sku: 'D' } });
+			expect(revisions.map((r) => [r.modelId, r.operation, r.revision])).to.eql(
+				[
+					[2, 'update', 1],
+					[storedD.id, 'create', 0],
+				],
+			);
+			expect(revisions[0].diff).to.eql([
+				{ key: 'qty', values: { old: 2, new: 7 } },
+			]);
+		});
+		it('should only diff the columns the statement updates', async () => {
+			await setup({ trackFullModel: true });
+			await Product.bulkCreate(
+				[{ id: 1, sku: 'A', qty: 9, label: 'changed' }],
+				{
+					updateOnDuplicate: ['qty'],
+				},
+			);
+			const [revision] = await revisionsAfterSetup();
+			expect(revision.diff).to.eql([
+				{ key: 'qty', values: { old: 1, new: 9 } },
+			]);
+			expect(revision.current).to.eql({ sku: 'A', qty: 9, label: 'first' });
+		});
+		it('should not log rows that did not change', async () => {
+			await setup();
+			await Product.bulkCreate([{ id: 1, sku: 'A', qty: 1 }], {
+				updateOnDuplicate: ['qty'],
+			});
+			expect(await revisionsAfterSetup()).to.have.length(0);
+			expect((await Product.findByPk(1)).revision).to.equal(0);
+		});
+		it('should not log with noHistory', async () => {
+			await setup();
+			await Product.bulkCreate([{ id: 1, sku: 'A', qty: 5 }], {
+				updateOnDuplicate: ['qty'],
+				noHistory: true,
+			});
+			expect(await revisionsAfterSetup()).to.have.length(0);
+			expect((await Product.findByPk(1)).qty).to.equal(5);
+		});
+		it('should not log when disableHistoryAutoHook is set on the model', async () => {
+			await setup({}, { disableHistoryAutoHook: true });
+			await Product.bulkCreate([{ id: 1, sku: 'A', qty: 5 }], {
+				updateOnDuplicate: ['qty'],
+			});
+			expect(await Revision.count()).to.equal(0);
 		});
 	});
 	describe('Read-only Revision Model bulk operations', () => {

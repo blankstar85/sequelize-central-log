@@ -221,6 +221,8 @@ To keep bulk calls fast on a model and skip their history, pass `disableHistoryA
 await centralLog.addHistory(PageView, { disableHistoryAutoHook: true });
 ```
 
+`bulkCreate` with `updateOnDuplicate` stays a single statement. Before it runs, existing rows are looked up by `conflictAttributes` if you pass it, otherwise by the primary key and unique keys. New rows are logged as `create`. Existing rows whose updated columns changed are logged as `update` with the old values, and their revision number goes up.
+
 `Model.upsert` is tracked too. When the values include the primary key, the existing row is looked up first and the revision is logged as `create` or `update` with the real old values. An upsert that matches on a different unique key is logged as `upsert` with only the new values, because the previous state isn't known.
 
 ## Transactions and errors
