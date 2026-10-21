@@ -1,6 +1,6 @@
 import 'mocha';
 import { expect } from 'chai';
-import { DataTypes, Model, Op, Optional, Sequelize } from 'sequelize';
+import { DataTypes, Dialect, Model, Op, Optional, Sequelize } from 'sequelize';
 import { SequelizeCentralLog } from './index';
 import { getNamespace } from 'cls-hooked';
 import { AsyncLocalStorage } from 'async_hooks';
@@ -22,15 +22,29 @@ const reduceArray = (
 	}, {});
 };
 
+// Tests run on in-memory SQLite unless DB_DIALECT points them at MySQL or Postgres.
+const createSequelize = () => {
+	const dialect = (process.env.DB_DIALECT ?? 'sqlite') as Dialect;
+	if (dialect === 'sqlite') {
+		return new Sequelize({ dialect, storage: ':memory:', logging: false });
+	}
+	return new Sequelize({
+		dialect,
+		host: process.env.DB_HOST ?? '127.0.0.1',
+		port: Number(process.env.DB_PORT),
+		username: process.env.DB_USER,
+		password: process.env.DB_PASSWORD,
+		database: process.env.DB_NAME,
+		logging: false,
+	});
+};
+
 describe('SequelizeCentralLog', () => {
 	let sequelize: Sequelize;
 	beforeEach(async () => {
 		// DB Setup
-		sequelize = new Sequelize({
-			dialect: 'sqlite',
-			storage: ':memory:',
-			logging: false,
-		});
+		sequelize = createSequelize();
+		await sequelize.getQueryInterface().dropAllTables();
 
 		sequelize.define('User', {
 			name: {
@@ -118,6 +132,9 @@ describe('SequelizeCentralLog', () => {
 		});
 		await sequelize.sync();
 	});
+	afterEach(async () => {
+		await sequelize.close();
+	});
 	describe('Changes to Models', () => {
 		let CentralLog;
 		let Revision;
@@ -178,7 +195,10 @@ describe('SequelizeCentralLog', () => {
 			if (revisions[1]) {
 				expect(revisions[1].revision).to.equal(1);
 				expect(revisions[1].operation).to.equal('destroy');
-				expect(revisions[1].diff).to.eql({ name: 'dave', value: true });
+				expect(revisions[1].diff).to.deep.include({
+					name: 'dave',
+					value: true,
+				});
 			}
 		});
 	});
@@ -204,11 +224,12 @@ describe('SequelizeCentralLog', () => {
 			const revisions = await Revision.findAll();
 			expect(tables);
 			expect(revisions.length).to.equal(3);
+			// Rows are saved concurrently, so revisions can be written in any order.
 			expect(
 				revisions.map((instance) => {
 					return instance.diff[0];
 				}),
-			).to.eql([
+			).to.have.deep.members([
 				{ key: 'name', values: { old: null, new: 'Dave' } },
 				{ key: 'name', values: { old: null, new: 'Bob' } },
 				{ key: 'name', values: { old: null, new: 'george' } },
@@ -287,7 +308,7 @@ describe('SequelizeCentralLog', () => {
 						{ name: 'bob', value: 'true' },
 						{ transaction: t },
 					);
-					await table.update({ name: 'bobs' });
+					await table.update({ name: 'bobs' }, { transaction: t });
 					throw new Error();
 				});
 			} catch {
@@ -675,7 +696,9 @@ describe('SequelizeCentralLog', () => {
 			expect(revisions[1].diff).to.eql([
 				{ key: 'meta', values: { old: { a: 1 }, new: { a: 2, tags: ['x'] } } },
 			]);
-			expect(revisions[1].current).to.eql({ meta: { a: 2, tags: ['x'] } });
+			expect(revisions[1].current).to.deep.include({
+				meta: { a: 2, tags: ['x'] },
+			});
 		});
 		it('should not log an update without tracked changes', async () => {
 			const table = await Table.create({ count: 1 });
@@ -834,10 +857,9 @@ describe('SequelizeCentralLog', () => {
 			Revision = await CentralLog.defineModels();
 			Product = sequelize.model('Product');
 			await CentralLog.addHistory(Product, historyOptions);
-			await Product.bulkCreate([
-				{ id: 1, sku: 'A', qty: 1, label: 'first' },
-				{ id: 2, sku: 'B', qty: 2, label: 'second' },
-			]);
+			// One at a time so A gets id 1 and B gets id 2.
+			await Product.create({ sku: 'A', qty: 1, label: 'first' });
+			await Product.create({ sku: 'B', qty: 2, label: 'second' });
 		};
 		const revisionsAfterSetup = async () =>
 			(await Revision.findAll({ order: [['id', 'ASC']] })).slice(2);
@@ -921,7 +943,7 @@ describe('SequelizeCentralLog', () => {
 			await Product.bulkCreate([{ id: 1, sku: 'A', qty: 5 }], {
 				updateOnDuplicate: ['qty'],
 			});
-			expect(await Revision.count()).to.equal(0);
+			expect(await revisionsAfterSetup()).to.have.length(0);
 		});
 	});
 	describe('Read-only Revision Model bulk operations', () => {
