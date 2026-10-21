@@ -1,6 +1,6 @@
 import 'mocha';
 import { expect } from 'chai';
-import { DataTypes, Model, Op, Optional, Sequelize } from 'sequelize';
+import { DataTypes, Dialect, Model, Op, Optional, Sequelize } from 'sequelize';
 import { SequelizeCentralLog } from './index';
 import { getNamespace } from 'cls-hooked';
 import { AsyncLocalStorage } from 'async_hooks';
@@ -22,15 +22,29 @@ const reduceArray = (
 	}, {});
 };
 
+// Tests run on in-memory SQLite unless DB_DIALECT points them at MySQL or Postgres.
+const createSequelize = () => {
+	const dialect = (process.env.DB_DIALECT ?? 'sqlite') as Dialect;
+	if (dialect === 'sqlite') {
+		return new Sequelize({ dialect, storage: ':memory:', logging: false });
+	}
+	return new Sequelize({
+		dialect,
+		host: process.env.DB_HOST ?? '127.0.0.1',
+		port: Number(process.env.DB_PORT),
+		username: process.env.DB_USER,
+		password: process.env.DB_PASSWORD,
+		database: process.env.DB_NAME,
+		logging: false,
+	});
+};
+
 describe('SequelizeCentralLog', () => {
 	let sequelize: Sequelize;
 	beforeEach(async () => {
 		// DB Setup
-		sequelize = new Sequelize({
-			dialect: 'sqlite',
-			storage: ':memory:',
-			logging: false,
-		});
+		sequelize = createSequelize();
+		await sequelize.getQueryInterface().dropAllTables();
 
 		sequelize.define('User', {
 			name: {
@@ -94,6 +108,18 @@ describe('SequelizeCentralLog', () => {
 				type: DataTypes.JSON,
 			},
 		});
+		sequelize.define('Product', {
+			sku: {
+				type: DataTypes.STRING,
+				unique: true,
+			},
+			qty: {
+				type: DataTypes.INTEGER,
+			},
+			label: {
+				type: DataTypes.STRING,
+			},
+		});
 		sequelize.define('NotIdPrimary', {
 			notID: {
 				type: DataTypes.INTEGER,
@@ -105,6 +131,9 @@ describe('SequelizeCentralLog', () => {
 			},
 		});
 		await sequelize.sync();
+	});
+	afterEach(async () => {
+		await sequelize.close();
 	});
 	describe('Changes to Models', () => {
 		let CentralLog;
@@ -166,7 +195,10 @@ describe('SequelizeCentralLog', () => {
 			if (revisions[1]) {
 				expect(revisions[1].revision).to.equal(1);
 				expect(revisions[1].operation).to.equal('destroy');
-				expect(revisions[1].diff).to.eql({ name: 'dave', value: true });
+				expect(revisions[1].diff).to.deep.include({
+					name: 'dave',
+					value: true,
+				});
 			}
 		});
 	});
@@ -192,11 +224,12 @@ describe('SequelizeCentralLog', () => {
 			const revisions = await Revision.findAll();
 			expect(tables);
 			expect(revisions.length).to.equal(3);
+			// Rows are saved concurrently, so revisions can be written in any order.
 			expect(
 				revisions.map((instance) => {
 					return instance.diff[0];
 				}),
-			).to.eql([
+			).to.have.deep.members([
 				{ key: 'name', values: { old: null, new: 'Dave' } },
 				{ key: 'name', values: { old: null, new: 'Bob' } },
 				{ key: 'name', values: { old: null, new: 'george' } },
@@ -275,7 +308,7 @@ describe('SequelizeCentralLog', () => {
 						{ name: 'bob', value: 'true' },
 						{ transaction: t },
 					);
-					await table.update({ name: 'bobs' });
+					await table.update({ name: 'bobs' }, { transaction: t });
 					throw new Error();
 				});
 			} catch {
@@ -663,7 +696,9 @@ describe('SequelizeCentralLog', () => {
 			expect(revisions[1].diff).to.eql([
 				{ key: 'meta', values: { old: { a: 1 }, new: { a: 2, tags: ['x'] } } },
 			]);
-			expect(revisions[1].current).to.eql({ meta: { a: 2, tags: ['x'] } });
+			expect(revisions[1].current).to.deep.include({
+				meta: { a: 2, tags: ['x'] },
+			});
 		});
 		it('should not log an update without tracked changes', async () => {
 			const table = await Table.create({ count: 1 });
@@ -808,6 +843,107 @@ describe('SequelizeCentralLog', () => {
 				null,
 				null,
 			]);
+		});
+	});
+	describe('Bulk create with updateOnDuplicate', () => {
+		let Revision;
+		let Product;
+		const setup = async (options = {}, historyOptions = {}) => {
+			const CentralLog = new SequelizeCentralLog(sequelize, {
+				enableRevisionAttributeMigration: true,
+				enableMigration: true,
+				...options,
+			});
+			Revision = await CentralLog.defineModels();
+			Product = sequelize.model('Product');
+			await CentralLog.addHistory(Product, historyOptions);
+			// One at a time so A gets id 1 and B gets id 2.
+			await Product.create({ sku: 'A', qty: 1, label: 'first' });
+			await Product.create({ sku: 'B', qty: 2, label: 'second' });
+		};
+		const revisionsAfterSetup = async () =>
+			(await Revision.findAll({ order: [['id', 'ASC']] })).slice(2);
+
+		it('should log updates for rows that conflict on the primary key', async () => {
+			await setup();
+			await Product.bulkCreate(
+				[
+					{ id: 1, sku: 'A', qty: 5 },
+					{ id: 3, sku: 'C', qty: 3 },
+				],
+				{ updateOnDuplicate: ['qty'] },
+			);
+			const revisions = await revisionsAfterSetup();
+			expect(revisions.map((r) => [r.modelId, r.operation, r.revision])).to.eql(
+				[
+					[1, 'update', 1],
+					[3, 'create', 0],
+				],
+			);
+			expect(revisions[0].diff).to.eql([
+				{ key: 'qty', values: { old: 1, new: 5 } },
+			]);
+			expect((await Product.findByPk(1)).revision).to.equal(1);
+			expect((await Product.findByPk(3)).revision).to.equal(0);
+		});
+		it('should log updates for rows that conflict on a unique key', async () => {
+			await setup();
+			await Product.bulkCreate(
+				[
+					{ sku: 'B', qty: 7 },
+					{ sku: 'D', qty: 4 },
+				],
+				{ updateOnDuplicate: ['qty'], conflictAttributes: ['sku'] },
+			);
+			const revisions = await revisionsAfterSetup();
+			const storedD = await Product.findOne({ where: { sku: 'D' } });
+			expect(revisions.map((r) => [r.modelId, r.operation, r.revision])).to.eql(
+				[
+					[2, 'update', 1],
+					[storedD.id, 'create', 0],
+				],
+			);
+			expect(revisions[0].diff).to.eql([
+				{ key: 'qty', values: { old: 2, new: 7 } },
+			]);
+		});
+		it('should only diff the columns the statement updates', async () => {
+			await setup({ trackFullModel: true });
+			await Product.bulkCreate(
+				[{ id: 1, sku: 'A', qty: 9, label: 'changed' }],
+				{
+					updateOnDuplicate: ['qty'],
+				},
+			);
+			const [revision] = await revisionsAfterSetup();
+			expect(revision.diff).to.eql([
+				{ key: 'qty', values: { old: 1, new: 9 } },
+			]);
+			expect(revision.current).to.eql({ sku: 'A', qty: 9, label: 'first' });
+		});
+		it('should not log rows that did not change', async () => {
+			await setup();
+			await Product.bulkCreate([{ id: 1, sku: 'A', qty: 1 }], {
+				updateOnDuplicate: ['qty'],
+			});
+			expect(await revisionsAfterSetup()).to.have.length(0);
+			expect((await Product.findByPk(1)).revision).to.equal(0);
+		});
+		it('should not log with noHistory', async () => {
+			await setup();
+			await Product.bulkCreate([{ id: 1, sku: 'A', qty: 5 }], {
+				updateOnDuplicate: ['qty'],
+				noHistory: true,
+			});
+			expect(await revisionsAfterSetup()).to.have.length(0);
+			expect((await Product.findByPk(1)).qty).to.equal(5);
+		});
+		it('should not log when disableHistoryAutoHook is set on the model', async () => {
+			await setup({}, { disableHistoryAutoHook: true });
+			await Product.bulkCreate([{ id: 1, sku: 'A', qty: 5 }], {
+				updateOnDuplicate: ['qty'],
+			});
+			expect(await revisionsAfterSetup()).to.have.length(0);
 		});
 	});
 	describe('Read-only Revision Model bulk operations', () => {

@@ -1,9 +1,10 @@
-import { DataTypes, Model, Transaction, WhereOptions } from 'sequelize';
+import { DataTypes, Model, Op, Transaction, WhereOptions } from 'sequelize';
 import { ModelDefined } from 'sequelize/types/model';
 import { buildDiff, isSameValue, snapshot } from './diff';
 import {
 	AddHistoryOptions,
 	ConfigOptions,
+	DiffEntry,
 	RevisionDiff,
 	RevisionOperation,
 	UserId,
@@ -32,6 +33,29 @@ interface UpsertState {
 	existing: Instance | null | undefined;
 }
 
+interface BulkCreateOptions extends HookOptions {
+	updateOnDuplicate?: string[];
+	conflictAttributes?: string[];
+}
+
+/** Attribute values that identify a row, e.g. { id: 1 } or { sku: 'A' }. */
+type KeyCondition = Record<string, unknown>;
+
+interface BulkUpsertRow {
+	/** Key values the row could conflict on, taken before the insert. */
+	conditions: KeyCondition[];
+	/** The row as it was before the statement, when it already existed. */
+	existing?: Instance;
+	/** Diff for a row that turns out to be new. */
+	createDiff: DiffEntry[];
+}
+
+interface BulkUpsertState {
+	/** Tracked attributes the statement updates on existing rows. */
+	updateKeys: string[];
+	rows: Map<Instance, BulkUpsertRow>;
+}
+
 export interface HistoryContext {
 	config: ConfigOptions;
 	revisionModel: ModelDefined<any, any>;
@@ -46,6 +70,7 @@ export class ModelHistory {
 	// Diffs computed in before* hooks, written in after* hooks.
 	private readonly pending = new WeakMap<Instance, RevisionDiff>();
 	private readonly upserts = new WeakMap<object, UpsertState>();
+	private readonly bulkUpserts = new WeakMap<object, BulkUpsertState>();
 
 	constructor(
 		private readonly model: ModelDefined<any, any>,
@@ -69,9 +94,8 @@ export class ModelHistory {
 		model.addHook('afterDestroy', this.afterChange('destroy'));
 		model.addHook('beforeUpsert', this.beforeUpsert);
 		model.addHook('afterUpsert', this.afterUpsert);
-		model.addHook('beforeBulkCreate', (_instances, options) =>
-			this.forceIndividualHooks(options),
-		);
+		model.addHook('beforeBulkCreate', this.beforeBulkCreate);
+		model.addHook('afterBulkCreate', this.afterBulkCreate);
 		model.addHook('beforeBulkUpdate', this.forceIndividualHooks);
 		model.addHook('beforeBulkDestroy', this.forceIndividualHooks);
 	}
@@ -250,12 +274,206 @@ export class ModelHistory {
 		await this.writeRevision(operation, record, revision, diff, options);
 	};
 
+	private beforeBulkCreate = async (
+		instances: Instance[],
+		options: BulkCreateOptions,
+	): Promise<void> => {
+		if (!options.updateOnDuplicate) {
+			this.forceIndividualHooks(options);
+			return;
+		}
+		if (
+			this.options.disableHistoryAutoHook ||
+			options.noHistory ||
+			options.individualHooks
+		) {
+			return;
+		}
+		// Saving row by row would log updated rows as creates on MySQL and fails on
+		// Postgres and SQLite, so the statement stays a bulk insert and is tracked here.
+		const keySets = this.conflictKeySets(options);
+		const tracked = this.trackedKeys();
+		const rows = new Map<Instance, BulkUpsertRow>();
+		for (const instance of instances) {
+			rows.set(instance, {
+				conditions: keySets
+					.map((keys) => this.keyCondition(instance, keys))
+					.filter((condition): condition is KeyCondition => !!condition),
+				createDiff: buildDiff(
+					tracked.filter((key) => instance.changed(key)),
+					() => null,
+					(key) => instance.getDataValue(key),
+				),
+			});
+			instance.set(this.config.attributeRevision, 0);
+		}
+
+		const allConditions = [...rows.values()].flatMap((row) => row.conditions);
+		const existingRows = await this.findRows(allConditions, options);
+		for (const row of rows.values()) {
+			row.existing = matchRow(existingRows, row.conditions);
+		}
+
+		const trackedSet = new Set(tracked);
+		this.bulkUpserts.set(options, {
+			updateKeys: options.updateOnDuplicate.filter((key) =>
+				trackedSet.has(key),
+			),
+			rows,
+		});
+	};
+
+	private afterBulkCreate = async (
+		instances: Instance[],
+		options: BulkCreateOptions,
+	): Promise<void> => {
+		const state = this.bulkUpserts.get(options);
+		if (!state) {
+			return;
+		}
+		this.bulkUpserts.delete(options);
+
+		// MySQL can report wrong auto-increment ids for new rows in a batch that also
+		// updates rows, so new rows are read back by the keys they were inserted with.
+		const created = [...state.rows.values()].filter((row) => !row.existing);
+		const createdRows = await this.findRows(
+			created.flatMap((row) => row.conditions),
+			options,
+		);
+
+		const revisionKey = this.config.attributeRevision;
+		for (const instance of instances) {
+			const row = state.rows.get(instance);
+			if (!row) {
+				continue;
+			}
+			const { existing } = row;
+			if (!existing) {
+				if (row.createDiff.length > 0) {
+					const stored = matchRow(createdRows, row.conditions) ?? instance;
+					await this.writeRevision(
+						'create',
+						stored,
+						0,
+						row.createDiff,
+						options,
+					);
+				}
+				continue;
+			}
+
+			const changedKeys = state.updateKeys.filter(
+				(key) =>
+					!isSameValue(existing.getDataValue(key), instance.getDataValue(key)),
+			);
+			if (changedKeys.length === 0) {
+				continue;
+			}
+			const revision =
+				((existing.getDataValue(revisionKey) as number) ?? 0) + 1;
+			// The statement wrote revision 0 to new rows only, so bump updated rows here.
+			await this.model.update(
+				{ [revisionKey]: revision },
+				{
+					where: existing.where() as WhereOptions,
+					hooks: false,
+					silent: true,
+					transaction: options.transaction,
+				},
+			);
+			const changed = new Set(changedKeys);
+			const readNew = (key: string) =>
+				changed.has(key)
+					? instance.getDataValue(key)
+					: existing.getDataValue(key);
+			await this.writeRevision(
+				'update',
+				existing,
+				revision,
+				buildDiff(changedKeys, (key) => existing.getDataValue(key), readNew),
+				options,
+				readNew,
+			);
+		}
+	};
+
+	/**
+	 * Attribute sets an insert can conflict on: conflictAttributes when given,
+	 * otherwise the primary key and each unique key.
+	 */
+	private conflictKeySets(options: BulkCreateOptions): string[][] {
+		if (options.conflictAttributes?.length) {
+			return [options.conflictAttributes];
+		}
+		const attributeByField = new Map<string, string>();
+		for (const [name, attribute] of Object.entries(
+			this.model.getAttributes(),
+		)) {
+			attributeByField.set(attribute.field ?? name, name);
+		}
+		const toAttributes = (
+			fields: (string | { name?: string; attribute?: string })[],
+		) =>
+			fields.map((field) => {
+				const name =
+					typeof field === 'string'
+						? field
+						: (field.attribute ?? field.name ?? '');
+				return attributeByField.get(name) ?? name;
+			});
+
+		// uniqueKeys and _indexes aren't in Sequelize's types.
+		const model = this.model as any;
+		const keySets: string[][] = [[...this.model.primaryKeyAttributes]];
+		for (const key of Object.values<{ fields: string[] }>(
+			model.uniqueKeys ?? {},
+		)) {
+			keySets.push(toAttributes(key.fields));
+		}
+		for (const index of model._indexes ?? []) {
+			if (index.unique && !index.where) {
+				keySets.push(toAttributes(index.fields));
+			}
+		}
+		return keySets.filter((keys) => keys.length > 0);
+	}
+
+	private keyCondition(
+		instance: Instance,
+		keys: string[],
+	): KeyCondition | null {
+		const condition: KeyCondition = {};
+		for (const key of keys) {
+			const value = instance.getDataValue(key);
+			if (value == null) {
+				return null;
+			}
+			condition[key] = value;
+		}
+		return condition;
+	}
+
+	private async findRows(
+		conditions: KeyCondition[],
+		options: HookOptions,
+	): Promise<Instance[]> {
+		if (conditions.length === 0) {
+			return [];
+		}
+		return this.model.unscoped().findAll({
+			where: { [Op.or]: conditions },
+			paranoid: false,
+			transaction: options.transaction,
+		});
+	}
+
 	private async writeRevision(
 		operation: RevisionOperation,
 		instance: Instance,
 		revision: number,
 		diff: RevisionDiff,
 		options: HookOptions,
+		readCurrent: (key: string) => unknown = (key) => instance.getDataValue(key),
 	): Promise<void> {
 		const { config } = this;
 		const primaryKeys = this.model.primaryKeyAttributes;
@@ -269,9 +487,7 @@ export class ModelHistory {
 		};
 
 		if (config.trackFullModel) {
-			values.current = snapshot(this.trackedKeys(), (key) =>
-				instance.getDataValue(key),
-			);
+			values.current = snapshot(this.trackedKeys(), readCurrent);
 		}
 		// Option on the query takes precedence over getUserId / the cls namespace.
 		if (config.userModel && !options.skipLoggingUser) {
@@ -296,4 +512,25 @@ export class ModelHistory {
 			config.log(error);
 		}
 	}
+}
+
+/**
+ * First row matching any of the conditions. Values are compared as strings
+ * because drivers can return keys as a different type than they were set.
+ */
+function matchRow(
+	rows: Instance[],
+	conditions: KeyCondition[],
+): Instance | undefined {
+	for (const condition of conditions) {
+		const row = rows.find((candidate) =>
+			Object.entries(condition).every(
+				([key, value]) => String(candidate.getDataValue(key)) === String(value),
+			),
+		);
+		if (row) {
+			return row;
+		}
+	}
+	return undefined;
 }

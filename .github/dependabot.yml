@@ -4,6 +4,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # Types stay on the oldest supported Node version (see engines).
+      - dependency-name: '@types/node'
+        update-types: [version-update:semver-major]
     groups:
       dev-dependencies:
         dependency-type: development
