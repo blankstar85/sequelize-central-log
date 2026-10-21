@@ -26,7 +26,11 @@ describe('SequelizeCentralLog', () => {
 	let sequelize: Sequelize;
 	beforeEach(async () => {
 		// DB Setup
-		sequelize = new Sequelize('sqlite::memory:', { logging: false });
+		sequelize = new Sequelize({
+			dialect: 'sqlite',
+			storage: ':memory:',
+			logging: false,
+		});
 
 		sequelize.define('User', {
 			name: {
