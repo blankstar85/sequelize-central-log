@@ -1,192 +1,328 @@
-# [**Sequelize Central Log**](https://github.com/forwardemail/email-templates)
+# sequelize-central-log
 
-[![styled with prettier](https://img.shields.io/badge/styled_with-prettier-ff69b4.svg)](https://github.com/prettier/prettier)
-[![license](https://img.shields.io/github/license/forwardemail/email-templates.svg)](LICENSE)
+[![npm](https://img.shields.io/npm/v/sequelize-central-log.svg)](https://www.npmjs.com/package/sequelize-central-log)
+[![CI](https://github.com/blankstar85/sequelize-central-log/actions/workflows/node.js.yml/badge.svg)](https://github.com/blankstar85/sequelize-central-log/actions/workflows/node.js.yml)
+[![license](https://img.shields.io/github/license/blankstar85/sequelize-central-log.svg)](LICENSE)
 
-Maintain Sequelize Model change history in a central table. This is highly configurable and supports
-composite primary keys ( up to 3 for now). Written in Typescript and provides typing. 
+Keeps the change history of your Sequelize models in one shared revision table. Every create, update, upsert and destroy writes a row with what changed, who changed it, and a revision number.
 
-Can be used with Sequelize-typescript as well.
+```typescript
+const post = await Post.create({ title: 'Draft', published: false });
+await post.update({ title: 'Launch notes', published: true }, { userId: 42 });
+```
 
-## Table of Contents
-* [Install](#install)
-* [Usage](#usage)
-  * [Setup](#setup)
-  * [Exclude Columns](#excluding-columns)
-  * [Composite Keys](#composite-keys)
-  * [Tracking Author](#tracking-author)
-  * [Bulk Actions](#bulk-actions)
-* [Options](#options)
-* [Support](#support)
-* [Author](#author)
-* [Thanks](#thanks)
+The update above writes this row to the `Revision` table:
+
+```json
+{
+  "id": 2,
+  "model": "Post",
+  "modelId": 1,
+  "operation": "update",
+  "revision": 1,
+  "userId": 42,
+  "diff": [
+    { "key": "title", "values": { "old": "Draft", "new": "Launch notes" } },
+    { "key": "published", "values": { "old": false, "new": true } }
+  ],
+  "createdAt": "2026-10-21T14:02:11.000Z"
+}
+```
+
+Written in TypeScript and ships its own types. Works with models defined through `sequelize.define`, `Model.init` classes and sequelize-typescript.
+
+## Contents
+
+- [Install](#install)
+- [Quick start](#quick-start)
+- [What gets recorded](#what-gets-recorded)
+- [Choosing which columns to track](#choosing-which-columns-to-track)
+- [Recording who made the change](#recording-who-made-the-change)
+- [Composite primary keys](#composite-primary-keys)
+- [Bulk operations and upsert](#bulk-operations-and-upsert)
+- [Transactions and errors](#transactions-and-errors)
+- [Skipping history](#skipping-history)
+- [Limitations](#limitations)
+- [Options](#options)
+- [Upgrading from 1.x](#upgrading-from-1x)
 
 ## Install
-
-To install run the following npm command: 
 
 ```sh
 npm install sequelize-central-log
 ```
 
+The major version follows Sequelize: 6.x of this package is for Sequelize v6 (6.37 or later). Fixes go out as patch releases. It needs Node.js 22 or later.
 
-## Usage
+## Quick start
 
-### Setup
-
-Sequelize Central log needs your initated sequelize connection for example:
+Create the central log with your Sequelize connection, define the revision model, then add history to each model you want to track. Define your own models first.
 
 ```typescript
 import { Sequelize } from 'sequelize';
+import { SequelizeCentralLog } from 'sequelize-central-log';
 
 const sequelize = new Sequelize('database', 'username', 'password');
+// ... define your models
+
+const centralLog = new SequelizeCentralLog(sequelize, {
+  enableMigration: true, // create the Revision table if it doesn't exist
+  enableRevisionAttributeMigration: true, // add the revision column to tracked tables
+});
+const Revision = await centralLog.defineModels();
+
+await centralLog.addHistory(sequelize.model('Post'));
+await centralLog.addHistory(Comment); // a Model.init class works too
 ```
 
-Import Sequelize Central Log, create a new instance by passing in your sequelize instance and options ( see below ) as
-well as defineModels() to setup the revision model, which should be done after initalizing them in sequelize.
+`addHistory` adds a `hasMany` association from the model to the revision model, so you can load a record's history with it:
 
 ```typescript
-import { SequelizeCentralLog } from 'sequelize-central-log';
-const options = {...}; // define options from list below
-const centralLog = new SequelizeCentralLog(sequelize, options);
-const Revision = centralLog.defineModels(); // returns your revision model instance for querying
-```
-This sets up your central log (revision table) and returns the table instance to be used for querying.
+const post = await Post.findByPk(1, { include: [Revision] });
+post.Revisions; // every revision for this post
 
-Lastly for each model you want to track history on call the addHistory function passing in the model.
-```typescript
-centralLog.addHistory(sequelize.model('ModelName'));
-
-// For those that define their models as a class, you can simply pass that class in.
-import SequelizeModelClass from '../sequelize_model_class';
-centralLog.addHistory(SequelizeModelClass);
-```
-The hasHistory function will add a hasMany association from the model to the revision model so you can include and have 
-revisions returned with your results.
-
-
-### Excluding Columns
-There are two ways to exclude columns from being tracked in the revision history table. 
-
-You can pass them in as a string array your options when instantiating the Sequelize Central Log ( this will override the defaults).
-See options below for the defaults. You can override the defaults by passing an empty array.
-```typescript
-const centralLog = new SequelizeCentralLog(sequelizeDB, { exclude: ['column1', 'column2']});
-
-```
-or you can pass them in per model as a string array when adding the history to the sequelize model:
-```typescript
-centralLog.addHistory(ModelA, {exclude: ['columnModelA']});
-centralLog.addHistory(ModelB);
-```
-General exclude and model level exclude are added together on the model level. So a globally excluded id column will apply to every 
-model while a column excluded when adding history to the model will be excluded only for that table.
-
-  Example based on the setup above:
-  1. Table A will have the columns id and columnModelA excluded.
-  2. Table B will only have the id column excluded.
-
-### Composite Keys
-You can use composite keys while tracking history. Current limitations are limited to 2 keys currently. 
-The second key is tracked in a column added to the revision table modelId2, (which you can override the column name). A 
-Third Composite key works the same with a default of modelId3.
-
-This is configured by passing the option when creating the log and then per model. 
-```typescript
-const centralLog = new SequelizeCentralLog(sequelizeDB, {useCompositeKeys: true});
-centralLog.addHistory(Model, { hasCompositeKey: true });
-
-/**
- * For a Third Composite Key
- */
-centralLog.addHistory(Model, { hasCompositeKey: true, thirdCompositeKey: true });
+await post.getRevisions();
 ```
 
-This will still create the hasMany association on the model and will pull back the revisions. YAY!
+If you manage your schema with migrations, leave both `enable*Migration` options off and create the `Revision` table and the `revision` columns yourself.
 
-### Tracking Author
+## What gets recorded
 
-You can track the author of the revision by passing the user model as an option when creating the SequelizeCentralLog
-instance( model must be initialized in sequelize first).
+Each revision row has these columns:
+
+| Column      | Contents                                                                                     |
+|-------------|----------------------------------------------------------------------------------------------|
+| `model`     | The model name.                                                                              |
+| `modelId`   | The record's primary key. `modelId2` and `modelId3` hold the extra keys of a composite key.  |
+| `operation` | `create`, `update`, `destroy`, or `upsert`.                                                  |
+| `revision`  | The record's revision number. It starts at 0 on create and goes up by one with each change.  |
+| `diff`      | For create and update, a list of `{ key, values: { old, new } }`. For destroy, the removed values as an object. |
+| `userId`    | Who made the change. Only present when `userModel` is set.                                    |
+| `current`   | The full tracked state of the record after the change. Only present when `trackFullModel` is set. |
+| `createdAt` | When the revision was written.                                                               |
+
+Each tracked model also gets a `revision` column holding its current revision number. Callers can't set it; the hooks overwrite any value passed in.
+
+An update that changes no tracked columns doesn't write a revision or bump the number.
+
+The revision model is read-only. Updating, destroying or upserting revisions throws an error, including bulk calls such as `Revision.destroy({ where: {} })` and `Revision.truncate()`.
+
+## Choosing which columns to track
+
+By default every column is tracked except primary keys and the columns in the global `exclude` list: `id`, `createdAt`, `updatedAt`, `deletedAt`, `created_at`, `updated_at`, `deleted_at` and `revision`.
+
+Passing `exclude` replaces that default list, so include the timestamps again if you still want them left out:
 
 ```typescript
-const centralLog = SequelizeCentralLog(sequelizeDB, {userModel: User});
+const centralLog = new SequelizeCentralLog(sequelize, {
+  exclude: ['createdAt', 'updatedAt', 'passwordHash'],
+});
 ```
 
-This will create a foreign key ( allowed null ) column on the revision table pointing to the id column in the user model.
-
-There are two ways to set the userid when tracking the author. You can use a namespace (cls-hooked) or pass a userId as an option on the
-sequelize query. The option passed on the query will override the namespace if you want to for some reason.
+To exclude columns on one model only, pass `exclude` to `addHistory`. It is added to the global list for that model:
 
 ```typescript
-import { createNamespace } from 'cls-hooked';
+await centralLog.addHistory(User, { exclude: ['lastLoginAt'] });
+await centralLog.addHistory(Post); // only the global list applies
+```
 
-const nameSpace = createNamespace('amespaceName');
+Virtual attributes and included associations are never recorded. JSON and array columns are recorded with their full values.
 
-// don't forget to call run on the namespace.
-nameSpace.run(() => {
-  nameSpace.set('keyName', userID);
-  // somehwere in your async chain..
-  Model.update(...{});
-  Model.create(...{});
+## Recording who made the change
+
+Set `userModel` to add a nullable `userId` foreign key to the revision table. Its type matches the user model's primary key, so integer, UUID and string ids all work.
+
+```typescript
+const centralLog = new SequelizeCentralLog(sequelize, { userModel: User });
+```
+
+The user id is resolved in this order:
+
+1. A `userId` option passed to the query.
+2. The `getUserId` function, if you set one.
+3. The cls-hooked namespace set in `continuationNamespace`.
+
+If none of them returns a value, `userId` is `null`.
+
+### AsyncLocalStorage
+
+`getUserId` can read from `AsyncLocalStorage` or any request context your app already has. This is the recommended setup.
+
+```typescript
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+const requestContext = new AsyncLocalStorage<{ userId: number }>();
+
+const centralLog = new SequelizeCentralLog(sequelize, {
+  userModel: User,
+  getUserId: () => requestContext.getStore()?.userId,
 });
 
-/**
- * OR
- */
-
-Model.update({...values}, {userId: userID});
-
+// Express middleware: every query in the request is attributed to the user
+app.use((req, res, next) => requestContext.run({ userId: req.user.id }, next));
 ```
 
-For when you need to create an entry that is an anonymous user even though the data doesn't gets saved in the table
-the revision history will have it. In order to prevent the user from being logged, used the propery skipLoggingUser
-on the query as a model configuration option.
-ex:
-```typescript
-Model.update({...values}, {skipLoggingUser: true});
-```
-
-### Bulk Actions
-By default Sequelize Central Log will track bulk actions. You can disable this on a per model basis.
+### Per query
 
 ```typescript
-CentralLog.hasHistory(Model, {disableHistoryAutoHook: true});
+await post.update({ title: 'Edited' }, { userId: admin.id });
 ```
+
+To record a change with no user even when one is in context, for example a public form submission, pass `skipLoggingUser`:
+
+```typescript
+await Feedback.create(values, { skipLoggingUser: true });
+```
+
+### cls-hooked
+
+cls-hooked still works, but it's an optional peer dependency, so install it yourself:
+
+```sh
+npm install cls-hooked
+```
+
+```typescript
+import { getNamespace } from 'cls-hooked';
+
+const centralLog = new SequelizeCentralLog(sequelize, {
+  userModel: User,
+  continuationNamespace: 'app',
+  continuationKey: 'userId', // the default
+});
+
+const namespace = getNamespace('app');
+await namespace.runPromise(async () => {
+  namespace.set('userId', user.id);
+  await post.update({ title: 'Edited' });
+});
+```
+
+## Composite primary keys
+
+Models with up to three primary key columns are supported. Turn on `useCompositeKeys` to add the `modelId2` and `modelId3` columns to the revision table, then mark each composite model:
+
+```typescript
+const centralLog = new SequelizeCentralLog(sequelize, { useCompositeKeys: true });
+
+await centralLog.addHistory(Membership, { hasCompositeKey: true });
+await centralLog.addHistory(Assignment, { hasCompositeKey: true, thirdCompositeKey: true });
+```
+
+The keys are stored in the order they appear in the model's `primaryKeyAttributes`. `addHistory` throws if the model has fewer keys than you declared, or if `useCompositeKeys` is off.
+
+## Bulk operations and upsert
+
+Sequelize only runs per-row hooks for bulk calls when `individualHooks` is set, so the central log turns it on for `bulkCreate`, `Model.update` and `Model.destroy` on tracked models. Each affected row gets its own revision. That means a bulk update first loads every matching row.
+
+To keep bulk calls fast on a model and skip their history, pass `disableHistoryAutoHook`:
+
+```typescript
+await centralLog.addHistory(PageView, { disableHistoryAutoHook: true });
+```
+
+`Model.upsert` is tracked too. When the values include the primary key, the existing row is looked up first and the revision is logged as `create` or `update` with the real old values. An upsert that matches on a different unique key is logged as `upsert` with only the new values, because the previous state isn't known.
+
+## Transactions and errors
+
+Revisions are written in the same transaction as the change, so a rolled back change leaves no revision behind. Pass `transaction` on the query as usual, or use `Sequelize.useCLS` to have it picked up automatically.
+
+If writing a revision fails, the error is passed to `log` and the change still succeeds. Set `failHard: true` to rethrow the error instead. Inside a transaction, that rolls back the change too.
+
+## Skipping history
+
+Pass `noHistory: true` to any query to skip its revision:
+
+```typescript
+await post.update({ viewCount: 10 }, { noHistory: true });
+```
+
+## Limitations
+
+The central log works through model hooks, so it can't see changes that bypass them:
+
+- raw queries and `queryInterface` calls, including migrations and seeders
+- `increment()` and `decrement()`, which Sequelize runs without hooks
+- `Model.update` and `Model.destroy` with `hooks: false`
+
+For a log that also covers those, use database triggers or change data capture.
 
 ## Options
-| Option                             | Type          | Default Value                                                                                                        | Description                                                                                                           |
-|------------------------------------|---------------|----------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------|
-| [attributeModelId]                 | String        | modelID                                                                                                              | column name for primary key of model tracked.                                                                         |
-| [attributeModelId2]                | String        | modelID2                                                                                                             | column name for the 2nd primary key for a composite key.                                                              |
-| [attributeRevision]                | String        | revision                                                                                                             | column name added to model being tracked with hasHistory()                                                            |
-| [attributeRevisionModel]           | String        | Revision                                                                                                             | revision table sequelize model name                                                                                   |
-| [attributeRevisionModelTableName]  | String        | Revision                                                                                                             | revision table name in database, if different.                                                                        |
-| [attributeUserId]                  | String        | userId                                                                                                               | column name on revision table for the user id.                                                                        |
-| [continuationKey]                  | String        | userId                                                                                                               | continuation key to set / get when tracking author.                                                                   |
-| [continuationNamespace]            | String        | NULL                                                                                                                 | continuation namespace name.                                                                                          |
-| [debug]                            | Boolean       | false                                                                                                                | Enables console logging.                                                                                              |
-| [enableMigration]                  | Boolean       | false                                                                                                                | Enables Database sync of only the revision model so the table will be created in database.                            |
-| [enableRevisionAttributeMigration] | Boolean       | false                                                                                                                | Enables addHistory to add the revision column on the model in the database.                                           |
-| [exclude]                          | Array(string) | ['id', 'createdAt', 'updatedAt', 'deletedAt', 'created_at', 'updated_at', 'deleted_at', [options.revisionAttribute]] | Array of global attributes to exclude from the revision log.                                                          |
-| [freezeTableName]                  | Boolean       | false                                                                                                                | Adds revision model level option of freeze table name.                                                                |
-| [primaryKeyType]                   | DataType      | DataTypes.Integer                                                                                                    | Allows Defining something Other than Integer as the Column Type. This uses Sequelizes DataTypes Field.                |
-| [trackFullModel]                   | Boolean       | false                                                                                                                | Adds another column (current) to the table and tracks the full non excluded current values ( not just what changed ). |
-| [useCompositeKeys]                 | Boolean       | false                                                                                                                | Denotes that composite keys are used in your models and adds the attributeModelId2 column to the revision table.      |
-| [underscored]                      | Boolean       | false                                                                                                                | Adds revision model level option of underscored column names ( created_at ).                                          |
-| [userModel]                        | Model Object  | NULL                                                                                                                 | Sequelize Model instance for the user.                                                                                |
 
+| Option                             | Type          | Default                  | Description                                                                                       |
+|------------------------------------|---------------|--------------------------|---------------------------------------------------------------------------------------------------|
+| `attributeModelId`                 | string        | `'modelId'`              | Revision column for the tracked record's primary key.                                             |
+| `attributeModelId2`                | string        | `'modelId2'`             | Revision column for the second key of a composite key.                                            |
+| `attributeModelId3`                | string        | `'modelId3'`             | Revision column for the third key of a composite key.                                             |
+| `attributeRevision`                | string        | `'revision'`             | Name of the revision column, on both the tracked models and the revision table.                   |
+| `attributeRevisionModel`           | string        | `'Revision'`             | Sequelize model name of the revision table.                                                       |
+| `attributeRevisionModelTableName`  | string        | `'Revision'`             | Database table name of the revision table.                                                        |
+| `attributeUserId`                  | string        | `'userId'`               | Revision column for the user id.                                                                  |
+| `continuationKey`                  | string        | `'userId'`               | Key that holds the user id in the cls-hooked namespace.                                           |
+| `continuationNamespace`            | string        | `null`                   | cls-hooked namespace to read the user id from.                                                    |
+| `debug`                            | boolean       | `false`                  | Log what the hooks are doing.                                                                     |
+| `enableMigration`                  | boolean       | `false`                  | Create the revision table with `sync()` when `defineModels()` runs.                               |
+| `enableRevisionAttributeMigration` | boolean       | `false`                  | Add the revision column to each tracked table when `addHistory()` runs.                           |
+| `exclude`                          | string[]      | see [above](#choosing-which-columns-to-track) | Columns never recorded, on any model. Replaces the default list.             |
+| `failHard`                         | boolean       | `false`                  | Rethrow errors from writing a revision instead of logging them.                                   |
+| `freezeTableName`                  | boolean       | `false`                  | `freezeTableName` for the revision model.                                                         |
+| `getUserId`                        | function      | `null`                   | Returns the current user id. Checked before `continuationNamespace`.                              |
+| `log`                              | function      | `console.log`            | Receives debug output and revision write errors.                                                  |
+| `primaryKeyType`                   | DataType      | `DataTypes.INTEGER`      | Column type of `modelId`, `modelId2` and `modelId3`. Use `DataTypes.STRING` to mix key types.      |
+| `trackFullModel`                   | boolean       | `false`                  | Add a `current` column with the full tracked state after each change.                             |
+| `underscored`                      | boolean       | `false`                  | `underscored` for the revision model (`created_at` instead of `createdAt`).                       |
+| `useCompositeKeys`                 | boolean       | `false`                  | Add the `modelId2` and `modelId3` columns for composite keys.                                     |
+| `userModel`                        | Model         | `null`                   | User model to link revisions to. Adds the `userId` column.                                        |
+
+Options for `addHistory(model, options)`:
+
+| Option                   | Type     | Description                                                       |
+|--------------------------|----------|-------------------------------------------------------------------|
+| `exclude`                | string[] | Columns to leave out for this model, added to the global list.    |
+| `hasCompositeKey`        | boolean  | The model has two primary key columns.                            |
+| `thirdCompositeKey`      | boolean  | The model has three primary key columns.                          |
+| `disableHistoryAutoHook` | boolean  | Don't turn on `individualHooks` for bulk calls on this model.     |
+
+Options you can pass to any query:
+
+| Option            | Type             | Description                                       |
+|-------------------|------------------|---------------------------------------------------|
+| `noHistory`       | boolean          | Don't write a revision.                           |
+| `userId`          | number or string | User to record, overriding `getUserId` and cls.   |
+| `skipLoggingUser` | boolean          | Record the revision with no user.                 |
+
+## Upgrading from 1.x
+
+Version 6.0 follows 1.7.4. The jump matches the Sequelize major version and isn't a sign of five releases' worth of changes.
+
+Requirements:
+
+- Node.js 22 or later and Sequelize 6.37 or later.
+- cls-hooked is now an optional peer dependency. If you use `continuationNamespace`, add it to your own dependencies.
+
+Fixes that change what gets stored:
+
+- Old values of `0`, `false` and `''` are recorded as they are. 1.x recorded them as `null`. Existing revision rows keep their `null` values.
+- JSON and array columns are recorded. 1.x left their new value out.
+- Primary keys are never part of the diff.
+- Upserts are recorded.
+- `attributeRevision` is used everywhere. 1.x always named the column on tracked models `revision`.
+
+Behavior changes:
+
+- The association from `addHistory` returns revisions. In 1.x, `include: [Revision]` and `getRevisions()` came back empty.
+- Revisions are written in the caller's transaction.
+- `failHard: true` rethrows revision errors. In 1.x the option did nothing.
+- Bulk updates, bulk destroys and truncates on the revision model throw. If your test suite clears the table with `truncate()`, use `sync({ force: true })` or `queryInterface.bulkDelete('Revision', {})` instead.
+- `addHistory` with `hasCompositeKey` throws unless `useCompositeKeys` is on.
+- The `userId` column type follows the user model's primary key. Existing tables aren't altered.
 
 ## Support
-Please use GitHub's [Issue Tracker](https://github.com/blankstar85/sequelize-central-log/issues)
 
-## Author
+Report bugs and ask questions on the [issue tracker](https://github.com/blankstar85/sequelize-central-log/issues).
 
-© Jacob Copeland
+## License
 
-Distributed under the MIT license. See [LICENSE](https://github.com/blankstar85/sequelize-central-log/blob/master/LICENSE) for more information.
+MIT © Jacob Copeland. See [LICENSE](LICENSE).
 
-
-## Thanks
-This project was inspired by:
-* [Sequelize Paper Trail](https://github.com/nielsgl/sequelize-paper-trail)
+Inspired by [sequelize-paper-trail](https://github.com/nielsgl/sequelize-paper-trail).
