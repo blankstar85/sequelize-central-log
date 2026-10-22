@@ -31,39 +31,57 @@ jobs:
     - run: npm run build --if-present
     - run: npm test
 
-  # The build job tests on SQLite. This runs the same tests on MySQL and Postgres.
+  # The build job tests on SQLite. This runs the same tests on each database server,
+  # one job per database so they run in parallel.
   databases:
+    name: test (${{ matrix.dialect }})
 
     runs-on: ubuntu-latest
 
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dialect: mysql
+            image: mysql:8.4
+            port: 3306
+            user: root
+            health: mysqladmin ping -ptest
+          - dialect: mariadb
+            image: mariadb:11.4
+            port: 3306
+            user: root
+            health: healthcheck.sh --connect --innodb_initialized
+          - dialect: postgres
+            image: postgres:17
+            port: 5432
+            user: postgres
+            health: pg_isready -U postgres
+
     services:
-      mysql:
-        image: mysql:8.4
+      db:
+        image: ${{ matrix.image }}
+        # Each image reads only its own variables.
         env:
           MYSQL_ROOT_PASSWORD: test
           MYSQL_DATABASE: central_log
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd "mysqladmin ping -ptest"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-      postgres:
-        image: postgres:17
-        env:
+          MARIADB_ROOT_PASSWORD: test
+          MARIADB_DATABASE: central_log
           POSTGRES_PASSWORD: test
           POSTGRES_DB: central_log
         ports:
-          - 5432:5432
+          - ${{ matrix.port }}:${{ matrix.port }}
         options: >-
-          --health-cmd "pg_isready -U postgres"
+          --health-cmd "${{ matrix.health }}"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
 
     env:
+      DB_DIALECT: ${{ matrix.dialect }}
       DB_HOST: 127.0.0.1
+      DB_PORT: ${{ matrix.port }}
+      DB_USER: ${{ matrix.user }}
       DB_PASSWORD: test
       DB_NAME: central_log
 
@@ -73,15 +91,4 @@ jobs:
       with:
         node-version: 24.x
     - run: npm ci
-    - name: Test on MySQL
-      run: npm test
-      env:
-        DB_DIALECT: mysql
-        DB_PORT: 3306
-        DB_USER: root
-    - name: Test on Postgres
-      run: npm test
-      env:
-        DB_DIALECT: postgres
-        DB_PORT: 5432
-        DB_USER: postgres
+    - run: npm test
