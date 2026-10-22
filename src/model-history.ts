@@ -1,11 +1,12 @@
 import { DataTypes, Model, Op, Transaction, WhereOptions } from 'sequelize';
 import { ModelDefined } from 'sequelize/types/model';
-import { buildDiff, isSameValue, snapshot } from './diff';
+import { buildDiff, formatDiff, isSameValue, snapshot } from './diff';
 import {
 	AddHistoryOptions,
 	ConfigOptions,
 	DiffEntry,
 	RevisionDiff,
+	RevisionMetadata,
 	RevisionOperation,
 	UserId,
 } from './types';
@@ -19,6 +20,7 @@ interface HookOptions {
 	noHistory?: boolean;
 	userId?: UserId;
 	skipLoggingUser?: boolean;
+	metadata?: RevisionMetadata;
 	individualHooks?: boolean;
 	transaction?: Transaction | null;
 }
@@ -483,7 +485,9 @@ export class ModelHistory {
 			[config.attributeModelId]: instance.get(primaryKeys[0]),
 			operation,
 			[config.attributeRevision]: revision,
-			diff,
+			diff: Array.isArray(diff)
+				? formatDiff(diff, operation, config.diffFormat)
+				: diff,
 		};
 
 		if (config.trackFullModel) {
@@ -493,6 +497,15 @@ export class ModelHistory {
 		if (config.userModel && !options.skipLoggingUser) {
 			values[config.attributeUserId] =
 				options.userId ?? this.context.resolveUserId();
+		}
+		if (config.metadata) {
+			// Query options override getMetadata key by key; undeclared keys are ignored.
+			const metadata = { ...config.getMetadata?.(), ...options.metadata };
+			for (const key of Object.keys(config.metadata)) {
+				if (metadata[key] !== undefined) {
+					values[key] = metadata[key];
+				}
+			}
 		}
 		if (config.useCompositeKeys && this.options.hasCompositeKey) {
 			values[config.attributeModelId2] = instance.get(primaryKeys[1]);

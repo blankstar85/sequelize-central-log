@@ -1,12 +1,14 @@
-import { DataTypes, Op, Sequelize } from 'sequelize';
+import { DataTypes, Op, Sequelize, Transaction } from 'sequelize';
 import { ModelDefined } from 'sequelize/types/model';
 import { defaultOptions } from './defaults';
+import { formatDiff } from './diff';
 import { ModelHistory } from './model-history';
 import { defineRevisionModel } from './revision-model';
 import {
 	AddHistoryOptions,
 	CentralLogOptions,
 	ConfigOptions,
+	RevisionOperation,
 	UserId,
 } from './types';
 import { createUserIdResolver } from './user-context';
@@ -75,6 +77,60 @@ export class SequelizeCentralLog {
 			constraints: false,
 			scope: this.associationScope(model, options),
 		});
+	}
+
+	/**
+	 * Rewrites create, update and upsert diffs stored in the 'entries' format as 'compact'.
+	 * Works in batches and skips rows that are already compact, so it can be stopped
+	 * and run again. Set diffFormat: 'compact' first so new revisions are compact too.
+	 * @returns the number of revisions converted
+	 */
+	public async migrateDiffFormat(
+		options: { batchSize?: number; transaction?: Transaction } = {},
+	): Promise<number> {
+		const Revision = this.revisionModel;
+		if (!Revision) {
+			throw new Error('Call defineModels() before migrateDiffFormat().');
+		}
+		const batchSize = options.batchSize ?? 500;
+		let lastId = 0;
+		let converted = 0;
+		for (;;) {
+			const rows = await Revision.findAll({
+				attributes: ['id', 'operation', 'diff'],
+				where: { id: { [Op.gt]: lastId } },
+				order: [['id', 'ASC']],
+				limit: batchSize,
+				transaction: options.transaction,
+			});
+			if (rows.length === 0) {
+				return converted;
+			}
+			for (const row of rows) {
+				const stored = row.get('diff');
+				const diff = typeof stored === 'string' ? JSON.parse(stored) : stored;
+				if (!Array.isArray(diff)) {
+					continue;
+				}
+				// hooks: false skips the read-only guard on the revision table.
+				await Revision.update(
+					{
+						diff: formatDiff(
+							diff,
+							row.get('operation') as RevisionOperation,
+							'compact',
+						),
+					},
+					{
+						where: { id: row.get('id') },
+						hooks: false,
+						transaction: options.transaction,
+					},
+				);
+				converted++;
+			}
+			lastId = rows[rows.length - 1].get('id') as number;
+		}
 	}
 
 	private debug(message: string): void {

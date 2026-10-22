@@ -1,4 +1,4 @@
-import { DataType } from 'sequelize';
+import { BelongsToOptions, DataType, ModelAttributes } from 'sequelize';
 import {
 	ModelDefined,
 	Logging as OriginalLogging,
@@ -17,6 +17,12 @@ export interface ConfigOptions {
 	continuationKey: string;
 	continuationNamespace: string | null;
 	debug: boolean;
+	/**
+	 * How create, update and upsert diffs are stored. 'entries' is a list of
+	 * { key, values: { old, new } }. 'compact' is { column: [old, new] } for updates
+	 * and { column: value } for creates, about half the size. Read either with readDiff().
+	 */
+	diffFormat: DiffFormat;
 	enableMigration: boolean;
 	enableRevisionAttributeMigration: boolean;
 	exclude: string[];
@@ -31,7 +37,17 @@ export interface ConfigOptions {
 	 * Takes precedence over continuationNamespace; options.userId on the query overrides both.
 	 */
 	getUserId: (() => UserId | null | undefined) | null;
+	/**
+	 * Returns metadata for the current change, e.g. a request id from AsyncLocalStorage.
+	 * options.metadata on the query overrides it key by key.
+	 */
+	getMetadata: (() => RevisionMetadata | null | undefined) | null;
 	log: (...args: unknown[]) => void;
+	/**
+	 * Extra columns on the revision table, e.g. { reason: DataTypes.STRING }.
+	 * Values come from getMetadata and options.metadata.
+	 */
+	metadata: ModelAttributes | null;
 	/** @deprecated Unused. */
 	mysql: boolean;
 	primaryKeyType: DataType;
@@ -41,7 +57,16 @@ export interface ConfigOptions {
 	/** @deprecated Unused. */
 	underscoredAttributes: boolean;
 	userModel: ModelDefined<any, any> | null;
+	/**
+	 * Options for the revision -> user association. Defaults to constraints: false,
+	 * so deleting a user keeps their id on the revisions they made.
+	 */
+	userAssociationOptions: Omit<BelongsToOptions, 'foreignKey'> | null;
 }
+
+export type DiffFormat = 'entries' | 'compact';
+
+export type RevisionMetadata = Record<string, unknown>;
 
 export type CentralLogOptions = Partial<ConfigOptions>;
 
@@ -61,8 +86,18 @@ export interface DiffEntry {
 	values: { old: unknown; new: unknown };
 }
 
-/** Destroy revisions store the removed values instead of a key/value diff. */
+/**
+ * Stored diff. Destroys store the removed values as { column: value } in either format.
+ * Compact updates store { column: [old, new] }, compact creates and upserts { column: value }.
+ */
 export type RevisionDiff = DiffEntry[] | Record<string, unknown>;
+
+/** One changed column, as returned by readDiff() for either format. */
+export interface DiffChange {
+	key: string;
+	old: unknown;
+	new: unknown;
+}
 
 // Add Typings for noHistory and userId on options.
 declare module 'sequelize' {
@@ -81,5 +116,9 @@ declare module 'sequelize' {
 		 * Should Skip Logging User, useful for Tables that require Anonymous users.
 		 */
 		skipLoggingUser?: boolean;
+		/**
+		 * Values for the revision's metadata columns.
+		 */
+		metadata?: RevisionMetadata;
 	}
 }

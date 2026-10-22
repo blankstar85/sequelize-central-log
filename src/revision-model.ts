@@ -62,6 +62,22 @@ export function defineRevisionModel(
 			allowNull: false,
 		};
 	}
+	if (config.metadata) {
+		const reserved = new Set([
+			...Object.keys(attributes),
+			'id',
+			'createdAt',
+			'created_at',
+		]);
+		for (const [key, definition] of Object.entries(config.metadata)) {
+			if (reserved.has(key)) {
+				throw new Error(
+					`Metadata column "${key}" has the same name as a revision column.`,
+				);
+			}
+			attributes[key] = definition;
+		}
+	}
 
 	const Revision = sequelize.define(config.attributeRevisionModel, attributes, {
 		freezeTableName: config.freezeTableName,
@@ -78,6 +94,9 @@ export function defineRevisionModel(
 
 	if (config.userModel) {
 		Revision.belongsTo(config.userModel, {
+			// Without a constraint, deleting a user keeps their id on past revisions.
+			constraints: false,
+			...config.userAssociationOptions,
 			foreignKey: config.attributeUserId,
 		});
 	}
