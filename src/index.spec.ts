@@ -1,7 +1,7 @@
 import 'mocha';
 import { expect } from 'chai';
 import { DataTypes, Dialect, Model, Op, Optional, Sequelize } from 'sequelize';
-import { SequelizeCentralLog } from './index';
+import { readDiff, SequelizeCentralLog } from './index';
 import { getNamespace } from 'cls-hooked';
 import { AsyncLocalStorage } from 'async_hooks';
 import { describe } from 'mocha';
@@ -974,6 +974,242 @@ describe('SequelizeCentralLog', () => {
 				);
 			}
 			expect(await Revision.count()).to.equal(1);
+		});
+	});
+	describe('Compact diff format', () => {
+		let Revision;
+		let Table;
+		beforeEach(async () => {
+			const CentralLog = new SequelizeCentralLog(sequelize, {
+				enableRevisionAttributeMigration: true,
+				enableMigration: true,
+				diffFormat: 'compact',
+			});
+			Revision = await CentralLog.defineModels();
+			Table = sequelize.model('PrimaryKey');
+			await CentralLog.addHistory(Table);
+		});
+		it('should store creates, updates and destroys compactly', async () => {
+			const table = await Table.create({ name: 'dave', value: false });
+			await table.update({ name: 'bob', value: true });
+			await table.destroy();
+			const revisions = await Revision.findAll({ order: [['id', 'ASC']] });
+			expect(revisions.map((r) => r.operation)).to.eql([
+				'create',
+				'update',
+				'destroy',
+			]);
+			expect(revisions[0].diff).to.eql({ name: 'dave', value: false });
+			expect(revisions[1].diff).to.eql({
+				name: ['dave', 'bob'],
+				value: [false, true],
+			});
+			expect(revisions[2].diff).to.deep.include({ name: 'bob', value: true });
+		});
+		it('should store upsert updates as old and new pairs', async () => {
+			await Table.upsert({ id: 1, name: 'dave' });
+			await Table.upsert({ id: 1, name: 'bob' });
+			const revisions = await Revision.findAll({ order: [['id', 'ASC']] });
+			expect(revisions[1].diff).to.eql({ name: ['dave', 'bob'] });
+		});
+		it('should be less than half the size of the entries format', async () => {
+			const table = await Table.create({ name: 'dave', value: false });
+			await table.update({ name: 'bob', value: true });
+			const [, update] = await Revision.findAll({ order: [['id', 'ASC']] });
+			const entries = readDiff(update).map(({ key, old, new: value }) => ({
+				key,
+				values: { old, new: value },
+			}));
+			expect(JSON.stringify(update.diff).length).to.be.lessThan(
+				JSON.stringify(entries).length / 2,
+			);
+		});
+	});
+	describe('readDiff', () => {
+		const changes = [
+			{ key: 'name', old: 'dave', new: 'bob' },
+			{ key: 'value', old: false, new: true },
+		];
+		it('should read the entries format', () => {
+			const diff = changes.map(({ key, old, new: value }) => ({
+				key,
+				values: { old, new: value },
+			}));
+			expect(readDiff({ operation: 'update', diff })).to.eql(changes);
+		});
+		it('should read the compact format for every operation', () => {
+			expect(
+				readDiff({
+					operation: 'update',
+					diff: { name: ['dave', 'bob'], value: [false, true] },
+				}),
+			).to.eql(changes);
+			expect(readDiff({ operation: 'create', diff: { name: 'bob' } })).to.eql([
+				{ key: 'name', old: null, new: 'bob' },
+			]);
+			expect(readDiff({ operation: 'destroy', diff: { name: 'bob' } })).to.eql([
+				{ key: 'name', old: 'bob', new: null },
+			]);
+		});
+		it('should parse diffs returned as JSON text', () => {
+			expect(
+				readDiff({ operation: 'update', diff: '{"name":["dave","bob"]}' }),
+			).to.eql([changes[0]]);
+		});
+	});
+	describe('migrateDiffFormat', () => {
+		it('should convert entries diffs to compact and keep their meaning', async () => {
+			let CentralLog = new SequelizeCentralLog(sequelize, {
+				enableRevisionAttributeMigration: true,
+				enableMigration: true,
+			});
+			let Revision: any = await CentralLog.defineModels();
+			const Table: any = sequelize.model('PrimaryKey');
+			await CentralLog.addHistory(Table);
+			const table = await Table.create({ name: 'dave', value: false });
+			await table.update({ name: 'bob', value: true });
+			await table.update({ name: 'viviana' });
+			await table.destroy();
+			const before = (await Revision.findAll({ order: [['id', 'ASC']] })).map(
+				readDiff,
+			);
+
+			CentralLog = new SequelizeCentralLog(sequelize, {
+				diffFormat: 'compact',
+			});
+			Revision = await CentralLog.defineModels();
+			expect(await CentralLog.migrateDiffFormat({ batchSize: 2 })).to.equal(3);
+			const after = await Revision.findAll({ order: [['id', 'ASC']] });
+			expect(after.every((r) => !Array.isArray(r.diff))).to.equal(true);
+			expect(after.map(readDiff)).to.eql(before);
+
+			// Running it again finds nothing left to convert.
+			expect(await CentralLog.migrateDiffFormat()).to.equal(0);
+		});
+		it('should keep the revision table read-only', async () => {
+			const CentralLog = new SequelizeCentralLog(sequelize, {
+				enableMigration: true,
+			});
+			const Revision: any = await CentralLog.defineModels();
+			await CentralLog.migrateDiffFormat();
+			let error;
+			try {
+				await Revision.update({ operation: 'x' }, { where: {} });
+			} catch (e) {
+				error = e;
+			}
+			expect(error?.message).to.contain('read-only');
+		});
+	});
+	describe('Revision metadata', () => {
+		const storage = new AsyncLocalStorage<{ requestId: string }>();
+		let Revision;
+		let Table;
+		const setup = async (options = {}) => {
+			const CentralLog = new SequelizeCentralLog(sequelize, {
+				enableRevisionAttributeMigration: true,
+				enableMigration: true,
+				metadata: {
+					reason: DataTypes.STRING,
+					requestId: DataTypes.STRING,
+				},
+				getMetadata: () => storage.getStore(),
+				...options,
+			});
+			Revision = await CentralLog.defineModels();
+			Table = sequelize.model('PrimaryKey');
+			await CentralLog.addHistory(Table);
+		};
+		it('should store metadata from getMetadata and the query', async () => {
+			await setup();
+			await storage.run({ requestId: 'req-1' }, async () => {
+				await Table.create({ name: 'a' }, { metadata: { reason: 'import' } });
+				await Table.create(
+					{ name: 'b' },
+					{ metadata: { requestId: 'override', ignored: 'x' } },
+				);
+			});
+			await Table.create({ name: 'c' });
+			const revisions = await Revision.findAll({
+				order: [['id', 'ASC']],
+				raw: true,
+			});
+			expect(revisions.map((r) => [r.reason, r.requestId])).to.eql([
+				['import', 'req-1'],
+				[null, 'override'],
+				[null, null],
+			]);
+			expect(revisions[1]).to.not.have.property('ignored');
+		});
+		it('should store metadata on bulk updates', async () => {
+			await setup();
+			await Table.bulkCreate([{ name: 'a' }, { name: 'b' }]);
+			await Table.update(
+				{ value: true },
+				{ where: {}, metadata: { reason: 'backfill' } },
+			);
+			const updates = await Revision.findAll({
+				where: { operation: 'update' },
+			});
+			expect(updates.map((r) => r.reason)).to.eql(['backfill', 'backfill']);
+		});
+		it('should reject metadata columns that clash with revision columns', async () => {
+			let error;
+			try {
+				await setup({ metadata: { operation: DataTypes.STRING } });
+			} catch (e) {
+				error = e;
+			}
+			expect(error?.message).to.contain('"operation"');
+		});
+		it('should fail the change when required metadata is missing with failHard', async () => {
+			await setup({
+				metadata: { reason: { type: DataTypes.STRING, allowNull: false } },
+				failHard: true,
+			});
+			let error;
+			try {
+				await Table.create({ name: 'a' });
+			} catch (e) {
+				error = e;
+			}
+			expect(error).to.not.equal(undefined);
+			await Table.create({ name: 'b' }, { metadata: { reason: 'ok' } });
+			expect(await Revision.count()).to.equal(1);
+		});
+	});
+	describe('User association', () => {
+		it('should keep the user id on revisions after the user is deleted', async () => {
+			const User: any = sequelize.model('User');
+			const CentralLog = new SequelizeCentralLog(sequelize, {
+				enableRevisionAttributeMigration: true,
+				enableMigration: true,
+				userModel: User,
+			});
+			const Revision: any = await CentralLog.defineModels();
+			const Table: any = sequelize.model('PrimaryKey');
+			await CentralLog.addHistory(Table);
+			const user = await User.create({ name: 'Bob' });
+			await Table.create({ name: 'a' }, { userId: user.id });
+			await user.destroy();
+			const [revision] = await Revision.findAll();
+			expect(revision.userId).to.equal(user.id);
+		});
+		it('should pass userAssociationOptions to the association', async () => {
+			const User: any = sequelize.model('User');
+			const CentralLog = new SequelizeCentralLog(sequelize, {
+				enableRevisionAttributeMigration: true,
+				enableMigration: true,
+				userModel: User,
+				userAssociationOptions: { as: 'author' },
+			});
+			const Revision: any = await CentralLog.defineModels();
+			const Table: any = sequelize.model('PrimaryKey');
+			await CentralLog.addHistory(Table);
+			const user = await User.create({ name: 'Bob' });
+			await Table.create({ name: 'a' }, { userId: user.id });
+			const revision = await Revision.findOne({ include: ['author'] });
+			expect(revision.author.name).to.equal('Bob');
 		});
 	});
 });

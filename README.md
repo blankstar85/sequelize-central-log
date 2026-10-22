@@ -36,14 +36,17 @@ Written in TypeScript and ships its own types. Works with models defined through
 - [Install](#install)
 - [Quick start](#quick-start)
 - [What gets recorded](#what-gets-recorded)
+- [Compact diffs](#compact-diffs)
 - [Choosing which columns to track](#choosing-which-columns-to-track)
 - [Recording who made the change](#recording-who-made-the-change)
+- [Recording why a change was made](#recording-why-a-change-was-made)
 - [Composite primary keys](#composite-primary-keys)
 - [Bulk operations and upsert](#bulk-operations-and-upsert)
 - [Transactions and errors](#transactions-and-errors)
 - [Skipping history](#skipping-history)
 - [Limitations](#limitations)
 - [Options](#options)
+- [Upgrading to 6.1](#upgrading-to-61)
 - [Upgrading from 1.x](#upgrading-from-1x)
 
 ## Install
@@ -96,8 +99,9 @@ Each revision row has these columns:
 | `modelId`   | The record's primary key. `modelId2` and `modelId3` hold the extra keys of a composite key.  |
 | `operation` | `create`, `update`, `destroy`, or `upsert`.                                                  |
 | `revision`  | The record's revision number. It starts at 0 on create and goes up by one with each change.  |
-| `diff`      | For create and update, a list of `{ key, values: { old, new } }`. For destroy, the removed values as an object. |
+| `diff`      | What changed. For create and update, a list of `{ key, values: { old, new } }`, or the [compact format](#compact-diffs). For destroy, the removed values as an object. |
 | `userId`    | Who made the change. Only present when `userModel` is set.                                    |
+| metadata    | Any [metadata columns](#recording-why-a-change-was-made) you declare.                        |
 | `current`   | The full tracked state of the record after the change. Only present when `trackFullModel` is set. |
 | `createdAt` | When the revision was written.                                                               |
 
@@ -106,6 +110,43 @@ Each tracked model also gets a `revision` column holding its current revision nu
 An update that changes no tracked columns doesn't write a revision or bump the number.
 
 The revision model is read-only. Updating, destroying or upserting revisions throws an error, including bulk calls such as `Revision.destroy({ where: {} })` and `Revision.truncate()`.
+
+## Compact diffs
+
+Set `diffFormat: 'compact'` to store diffs keyed by column instead of as a list of entries. Updates store `[old, new]` pairs, and creates and upserts store the new values:
+
+```json
+{ "title": ["Draft", "Launch notes"], "published": [false, true] }
+```
+
+Destroys store the removed values in both formats. Measured on 200 records with six typical columns:
+
+| Database | Create diff         | Update diff        |
+|----------|---------------------|--------------------|
+| Postgres | 292 → 109 bytes (63% smaller) | 123 → 63 bytes (49% smaller) |
+| MySQL    | 356 → 116 bytes (67% smaller) | 153 → 77 bytes (50% smaller) |
+
+The default stays `'entries'` in 6.x, so code that reads diffs keeps working. `readDiff` reads either format, including diffs returned as JSON text by raw queries, and returns one list for every operation:
+
+```typescript
+import { readDiff } from 'sequelize-central-log';
+
+for (const { key, old, new: value } of readDiff(revision)) {
+  console.log(`${key}: ${old} → ${value}`);
+}
+```
+
+To move an existing table to the compact format:
+
+1. Change code that reads `diff` to use `readDiff`, so it handles both formats.
+2. Set `diffFormat: 'compact'`. New revisions are written compactly from then on.
+3. Convert the existing rows:
+
+   ```typescript
+   const converted = await centralLog.migrateDiffFormat({ batchSize: 500 });
+   ```
+
+   It works through the table in batches by id and skips rows that are already compact, so you can stop it and run it again. Pass `transaction` to run it in one.
 
 ## Choosing which columns to track
 
@@ -130,10 +171,21 @@ Virtual attributes and included associations are never recorded. JSON and array 
 
 ## Recording who made the change
 
-Set `userModel` to add a nullable `userId` foreign key to the revision table. Its type matches the user model's primary key, so integer, UUID and string ids all work.
+Set `userModel` to add a nullable `userId` column to the revision table and a `belongsTo` association to the user model. Its type matches the user model's primary key, so integer, UUID and string ids all work.
 
 ```typescript
 const centralLog = new SequelizeCentralLog(sequelize, { userModel: User });
+```
+
+The association has no foreign key constraint, so deleting a user keeps their id on the revisions they made. Pass `userAssociationOptions` to set an alias or other `belongsTo` options:
+
+```typescript
+const centralLog = new SequelizeCentralLog(sequelize, {
+  userModel: User,
+  userAssociationOptions: { as: 'author' },
+});
+
+const revision = await Revision.findOne({ include: ['author'] });
 ```
 
 The user id is resolved in this order:
@@ -197,6 +249,26 @@ await namespace.runPromise(async () => {
   await post.update({ title: 'Edited' });
 });
 ```
+
+## Recording why a change was made
+
+Declare extra revision columns with `metadata`, using the same attribute definitions as `sequelize.define`. Values come from a `metadata` option on the query, or from `getMetadata`, which works like `getUserId`. The query option wins key by key, and keys you didn't declare are ignored.
+
+```typescript
+const requestContext = new AsyncLocalStorage<{ requestId: string }>();
+
+const centralLog = new SequelizeCentralLog(sequelize, {
+  metadata: {
+    reason: DataTypes.STRING,
+    requestId: DataTypes.STRING(64),
+  },
+  getMetadata: () => requestContext.getStore(),
+});
+
+await order.update({ status: 'refunded' }, { metadata: { reason: 'Customer request' } });
+```
+
+Bulk updates and destroys pass the option to every row's revision. To require a value, declare the column with `allowNull: false`. A revision without it then fails to write, which with `failHard: true` also fails the change. Metadata columns can't reuse the name of a revision column.
 
 ## Composite primary keys
 
@@ -263,17 +335,21 @@ For a log that also covers those, use database triggers or change data capture.
 | `continuationKey`                  | string        | `'userId'`               | Key that holds the user id in the cls-hooked namespace.                                           |
 | `continuationNamespace`            | string        | `null`                   | cls-hooked namespace to read the user id from.                                                    |
 | `debug`                            | boolean       | `false`                  | Log what the hooks are doing.                                                                     |
+| `diffFormat`                       | string        | `'entries'`              | `'compact'` stores diffs [keyed by column](#compact-diffs), about half the size.                  |
 | `enableMigration`                  | boolean       | `false`                  | Create the revision table with `sync()` when `defineModels()` runs.                               |
 | `enableRevisionAttributeMigration` | boolean       | `false`                  | Add the revision column to each tracked table when `addHistory()` runs.                           |
 | `exclude`                          | string[]      | see [above](#choosing-which-columns-to-track) | Columns never recorded, on any model. Replaces the default list.             |
 | `failHard`                         | boolean       | `false`                  | Rethrow errors from writing a revision instead of logging them.                                   |
 | `freezeTableName`                  | boolean       | `false`                  | `freezeTableName` for the revision model.                                                         |
+| `getMetadata`                      | function      | `null`                   | Returns metadata for the current change. The query's `metadata` option overrides it key by key.   |
 | `getUserId`                        | function      | `null`                   | Returns the current user id. Checked before `continuationNamespace`.                              |
 | `log`                              | function      | `console.log`            | Receives debug output and revision write errors.                                                  |
+| `metadata`                         | attributes    | `null`                   | Extra revision columns, e.g. `{ reason: DataTypes.STRING }`.                                      |
 | `primaryKeyType`                   | DataType      | `DataTypes.INTEGER`      | Column type of `modelId`, `modelId2` and `modelId3`. Use `DataTypes.STRING` to mix key types.      |
 | `trackFullModel`                   | boolean       | `false`                  | Add a `current` column with the full tracked state after each change.                             |
 | `underscored`                      | boolean       | `false`                  | `underscored` for the revision model (`created_at` instead of `createdAt`).                       |
 | `useCompositeKeys`                 | boolean       | `false`                  | Add the `modelId2` and `modelId3` columns for composite keys.                                     |
+| `userAssociationOptions`           | object        | `null`                   | `belongsTo` options for the revision → user association, e.g. `{ as: 'author' }`.                 |
 | `userModel`                        | Model         | `null`                   | User model to link revisions to. Adds the `userId` column.                                        |
 
 Options for `addHistory(model, options)`:
@@ -292,6 +368,32 @@ Options you can pass to any query:
 | `noHistory`       | boolean          | Don't write a revision.                           |
 | `userId`          | number or string | User to record, overriding `getUserId` and cls.   |
 | `skipLoggingUser` | boolean          | Record the revision with no user.                 |
+| `metadata`        | object           | Values for the revision's metadata columns.       |
+
+## Upgrading to 6.1
+
+Nothing changes for existing setups unless you opt in, with one exception: new revision tables are created without a foreign key from `userId` to the user table.
+
+`enableMigration` only creates the revision table when it doesn't exist, so on an existing table:
+
+- **Metadata columns** have to be added with a migration:
+
+  ```typescript
+  await queryInterface.addColumn('Revision', 'reason', { type: DataTypes.STRING });
+  ```
+
+- **The `userId` foreign key** stays until you remove it. While it's there, deleting a user sets `userId` to null on their revisions, or fails if your table was created with a different `ON DELETE` rule. To keep the ids:
+
+  ```typescript
+  const constraints = await queryInterface.getForeignKeyReferencesForTable('Revision');
+  for (const { constraintName, columnName } of constraints) {
+    if (columnName === 'userId') {
+      await queryInterface.removeConstraint('Revision', constraintName);
+    }
+  }
+  ```
+
+- **Compact diffs** are opt-in. See [Compact diffs](#compact-diffs) for the steps.
 
 ## Upgrading from 1.x
 

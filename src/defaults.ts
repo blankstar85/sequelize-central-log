@@ -12,6 +12,7 @@ export const defaultOptions: ConfigOptions = {
 	continuationKey: 'userId',
 	continuationNamespace: null,
 	debug: false,
+	diffFormat: 'entries',
 	enableMigration: false,
 	enableRevisionAttributeMigration: false,
 	exclude: [
@@ -27,7 +28,9 @@ export const defaultOptions: ConfigOptions = {
 	failHard: false,
 	freezeTableName: false,
 	getUserId: null,
+	getMetadata: null,
 	log: console.log,
+	metadata: null,
 	mysql: false,
 	primaryKeyType: DataTypes.INTEGER,
 	trackFullModel: false,
@@ -35,4 +38,5 @@ export const defaultOptions: ConfigOptions = {
 	underscored: false,
 	underscoredAttributes: false,
 	userModel: null,
+	userAssociationOptions: null,
 };
